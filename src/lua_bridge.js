@@ -1,6 +1,4 @@
 import { LuaFactory } from 'wasmoon';
-// import { Buffer } from 'buffer';
-// window.Buffer = Buffer;
 
 /**
  * Wraps the code in an anonymous function and injects the args array

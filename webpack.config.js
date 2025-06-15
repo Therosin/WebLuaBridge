@@ -17,19 +17,12 @@ module.exports = {
   },
   resolve: {
     fallback: {
-      "url": require.resolve("url/"),
-      "module": require.resolve("module/"),
-      "assert": require.resolve("assert/"),
-      "constants": require.resolve("constants-browserify"),
-      "util": require.resolve("util/"),
-      "path": require.resolve("path-browserify"),
-      "os": require.resolve("os-browserify/browser"),
-      "crypto": require.resolve("crypto-browserify"),
-      "stream": require.resolve("stream-browserify"),
-      "buffer": require.resolve("buffer/"),
-      "fs": false,
-      "child_process": false,
-      "vm": require.resolve("vm-browserify"),
+      path: false,
+      fs: false,
+      child_process: false,
+      crypto: false,
+      url: false,
+      module: false,
     }
   },
   module: {
