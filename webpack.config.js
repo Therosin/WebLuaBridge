@@ -4,7 +4,7 @@ const TerserPlugin = require('terser-webpack-plugin');
 const webpack = require('webpack');
 
 module.exports = {
-  entry: './src/lua_bridge.js',
+  entry: './src/lua_bridge.ts',
   output: {
     filename: 'LuaBridge/index.js',
     path: path.resolve(__dirname, 'dist'),
@@ -16,6 +16,7 @@ module.exports = {
     globalObject: 'this',
   },
   resolve: {
+    extensions: ['.ts', '.js'],
     fallback: {
       path: false,
       fs: false,
@@ -28,13 +29,14 @@ module.exports = {
   module: {
     rules: [
       {
-        test: /\.js$/,
+        test: /\.ts$/,
         exclude: /node_modules/,
         use: {
           loader: 'babel-loader',
           options: {
             presets: [
               ['@babel/preset-env', { modules: false }],
+              '@babel/preset-typescript',
             ],
           }
         },

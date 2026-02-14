@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "strict": false,
+    "noImplicitAny": false
+  },
+  "tasks": {
+    "check": "deno check mod.ts src/lua_bridge.ts examples/basic-run.ts examples/environment-plugin.ts examples/events-bridge.ts examples/lifecycle-mainloop.ts tests/bridge.execute.test.ts tests/bridge.environment-events.test.ts tests/bridge.lifecycle.test.ts tests/examples.e2e.test.ts",
+    "test": "deno test -A tests",
+    "lint": "deno lint",
+    "fmt": "deno fmt"
+  }
+}
