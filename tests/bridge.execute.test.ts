@@ -1,5 +1,6 @@
 import { assertEquals, assertRejects } from 'jsr:@std/assert';
 import { createLuaBridge, runLuaCode } from '../mod.ts';
+import LuaBridge from '../src/lua_bridge.ts';
 
 Deno.test('bridge: execute, mountFile/executeFile, and loadModule', async () => {
     const bridge = await createLuaBridge({ appName: 'DenoE2E' });
@@ -39,4 +40,21 @@ Deno.test('bridge: validates loadModule input and not-initialized access', async
 Deno.test('bridge: runLuaCode one-shot helper works', async () => {
     const result = await runLuaCode('return 7 * 6');
     assertEquals(result, 42);
+});
+
+Deno.test('bridge: constructor preserves globals named runtime and globals', async () => {
+    const bridge = new LuaBridge({
+        runtime: 42,
+        globals: 'kept',
+    });
+
+    try {
+        await bridge.init();
+        const runtimeValue = await bridge.execute('return runtime');
+        const globalsValue = await bridge.execute('return globals');
+        assertEquals(runtimeValue, 42);
+        assertEquals(globalsValue, 'kept');
+    } finally {
+        bridge.close();
+    }
 });

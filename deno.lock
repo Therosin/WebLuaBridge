@@ -16,6 +16,9 @@
     }
   },
   "workspace": {
+    "dependencies": [
+      "npm:wasmoon@1.16.0"
+    ],
     "packageJson": {
       "dependencies": [
         "npm:@babel/core@^7.24.7",

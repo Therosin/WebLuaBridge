@@ -1,4 +1,7 @@
 {
+  "imports": {
+    "wasmoon": "npm:wasmoon@1.16.0"
+  },
   "compilerOptions": {
     "strict": false,
     "noImplicitAny": false

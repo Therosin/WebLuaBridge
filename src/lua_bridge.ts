@@ -1,4 +1,4 @@
-import { LuaFactory } from 'npm:wasmoon@1.16.0';
+import { LuaFactory } from 'wasmoon';
 
 const DEFAULT_RUNTIME_OPTIONS = {
     openStandardLibs: true,
@@ -148,13 +148,6 @@ class LuaBridge {
      * @param {Object} [options={}] - Runtime/sandbox options forwarded to wasmoon
      */
     constructor(globals: any = {}, options: Record<string, any> = {}) {
-        // Allow constructor({ globals, runtime }) while preserving constructor(globals, runtime).
-        if (isObject(globals) && ('globals' in globals || 'runtime' in globals) && Object.keys(options).length === 0) {
-            const config = globals as { globals?: Record<string, any>, runtime?: Record<string, any> };
-            options = config.runtime || {};
-            globals = config.globals || {};
-        }
-
         this.factory = new LuaFactory();
         this.globals = globals;
         this.runtimeOptions = normalizeRuntimeOptions(options);
@@ -524,21 +517,7 @@ class LuaBridge {
     async execute(code, ...args) {
         this.assertInitialized();
         return await this.withExecutionLock(async () => {
-            try {
-                if (args.length > 0) {
-                    const argsGlobalName = this.nextArgsKey();
-                    this.lua.global.set(argsGlobalName, args);
-                    code = LuaWrap(code, argsGlobalName);
-                    try {
-                        return await this.lua.doString(code);
-                    } finally {
-                        this.lua.global.set(argsGlobalName, undefined);
-                    }
-                }
-                return await this.lua.doString(code);
-            } catch (error) {
-                throw toBridgeError('Failed to execute code', error);
-            }
+            return await this.executeInCurrentLock(code, ...args);
         });
     }
 
@@ -569,12 +548,14 @@ class LuaBridge {
             }
 
             const withEnvironment = async (callback) => {
-                this.lua.global.set(ENV_GLOBAL_NAME, env);
-                try {
-                    return await callback();
-                } finally {
-                    this.lua.global.set(ENV_GLOBAL_NAME, undefined);
-                }
+                return await this.withExecutionLock(async () => {
+                    this.lua.global.set(ENV_GLOBAL_NAME, env);
+                    try {
+                        return await callback();
+                    } finally {
+                        this.lua.global.set(ENV_GLOBAL_NAME, undefined);
+                    }
+                });
             };
 
             return {
@@ -596,7 +577,7 @@ local __scope = setmetatable({}, {
 local __chunk = assert(load(${toLuaLongString(code)}, nil, 't', __scope))
 return __chunk(...)
 `;
-                    return await withEnvironment(() => this.execute(wrappedCode, ...args));
+                    return await withEnvironment(() => this.executeInCurrentLock(wrappedCode, ...args));
                 },
                 executeFile: async (file, ...args) => {
                     const wrappedCode = `
@@ -616,11 +597,29 @@ local __scope = setmetatable({}, {
 local __chunk = assert(loadfile(${toLuaLongString(file)}, 't', __scope))
 return __chunk(...)
 `;
-                    return await withEnvironment(() => this.execute(wrappedCode, ...args));
+                    return await withEnvironment(() => this.executeInCurrentLock(wrappedCode, ...args));
                 },
             };
         } catch (error) {
             throw toBridgeError('Failed to use environment', error);
+        }
+    }
+
+    async executeInCurrentLock(code, ...args) {
+        try {
+            if (args.length > 0) {
+                const argsGlobalName = this.nextArgsKey();
+                this.lua.global.set(argsGlobalName, args);
+                code = LuaWrap(code, argsGlobalName);
+                try {
+                    return await this.lua.doString(code);
+                } finally {
+                    this.lua.global.set(argsGlobalName, undefined);
+                }
+            }
+            return await this.lua.doString(code);
+        } catch (error) {
+            throw toBridgeError('Failed to execute code', error);
         }
     }
 

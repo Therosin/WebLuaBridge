@@ -64,3 +64,43 @@ Deno.test('bridge: useEnvironment rejects invalid env', async () => {
         bridge.close();
     }
 });
+
+Deno.test('bridge: useEnvironment keeps environment binding inside execution lock', async () => {
+    const bridge = await createLuaBridge();
+    const firstEnv = { id: 'first' };
+    const secondEnv = { id: 'second' };
+
+    const firstPlugin = await bridge.useEnvironment(firstEnv);
+    const secondPlugin = await bridge.useEnvironment(secondEnv);
+
+    const originalWithExecutionLock = bridge.withExecutionLock.bind(bridge);
+    let releaseFirstLock: (() => void) | null = null;
+    const firstLockGate = new Promise<void>((resolve) => {
+        releaseFirstLock = resolve;
+    });
+    let invocationCount = 0;
+
+    bridge.withExecutionLock = async (operation) => {
+        invocationCount += 1;
+        if (invocationCount === 1) {
+            await firstLockGate;
+        }
+        return await originalWithExecutionLock(operation);
+    };
+
+    try {
+        const firstRun = firstPlugin.execute('return id');
+        const secondRun = secondPlugin.execute('return id');
+
+        if (releaseFirstLock) {
+            releaseFirstLock();
+        }
+
+        const [firstResult, secondResult] = await Promise.all([firstRun, secondRun]);
+        assertEquals(firstResult, 'first');
+        assertEquals(secondResult, 'second');
+    } finally {
+        bridge.withExecutionLock = originalWithExecutionLock;
+        bridge.close();
+    }
+});
