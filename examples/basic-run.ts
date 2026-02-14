@@ -1,4 +1,4 @@
-import { createLuaBridge } from '../src/lua_bridge.ts';
+import { createLuaBridge } from '../mod.ts';
 
 export async function main() {
     const bridge = await createLuaBridge({ appName: 'WebLuaBridgeExample' });
@@ -26,9 +26,9 @@ export async function main() {
     }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === Deno.mainModule) {
     main().catch((error) => {
         console.error(error);
-        process.exitCode = 1;
+        Deno.exit(1);
     });
 }

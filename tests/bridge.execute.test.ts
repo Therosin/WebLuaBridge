@@ -1,6 +1,5 @@
 import { assertEquals, assertRejects } from 'jsr:@std/assert';
-import { createLuaBridge, runLuaCode } from '../mod.ts';
-import LuaBridge from '../src/lua_bridge.ts';
+import LuaBridge, { createLuaBridge, runLuaCode } from '../mod.ts';
 
 Deno.test('bridge: execute, mountFile/executeFile, and loadModule', async () => {
     const bridge = await createLuaBridge({ appName: 'DenoE2E' });
@@ -29,7 +28,7 @@ Deno.test('bridge: validates loadModule input and not-initialized access', async
     );
     bridge.close();
 
-    const notInit = new (await import('../src/lua_bridge.ts')).default();
+    const notInit = new (await import('../mod.ts')).default();
     await assertRejects(
         async () => notInit.execute('return 1'),
         Error,

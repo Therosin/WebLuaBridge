@@ -31,9 +31,22 @@ Use a pinned tag/commit for production imports.
 ```sh
 deno task check
 deno task test
+deno task build
 ```
 
-## Node/Vitest Status
+## Runtime
 
-Node build/test workflows are still present and passing.
-This project is currently dual-lane (Node + Deno) while migration continues.
+This project is Deno-only.
+
+## Vendor Bundle
+
+Build vendor-ready ESM artifacts (no Node packaging):
+
+```sh
+deno task bundle
+deno task bundle:min
+```
+
+Outputs:
+- `dist/webluabridge.bundle.js`
+- `dist/webluabridge.bundle.min.js`

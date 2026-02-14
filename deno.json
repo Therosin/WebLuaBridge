@@ -1,7 +1,7 @@
 {
-  "imports": {
-    "wasmoon": "npm:wasmoon@1.16.0"
-  },
+  "name": "@webluabridge/webluabridge",
+  "version": "0.1.0",
+  "exports": "./mod.ts",
   "compilerOptions": {
     "strict": false,
     "noImplicitAny": false
@@ -9,6 +9,9 @@
   "tasks": {
     "check": "deno check mod.ts src/lua_bridge.ts examples/basic-run.ts examples/environment-plugin.ts examples/events-bridge.ts examples/lifecycle-mainloop.ts tests/bridge.execute.test.ts tests/bridge.environment-events.test.ts tests/bridge.lifecycle.test.ts tests/examples.e2e.test.ts",
     "test": "deno test -A tests",
+    "bundle": "deno bundle --platform=browser --format=esm mod.ts -o dist/webluabridge.bundle.js",
+    "bundle:min": "deno bundle --platform=browser --format=esm --minify mod.ts -o dist/webluabridge.bundle.min.js",
+    "build": "deno task check && deno task bundle && deno task bundle:min",
     "lint": "deno lint",
     "fmt": "deno fmt"
   }

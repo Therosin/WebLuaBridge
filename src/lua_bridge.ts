@@ -1,4 +1,4 @@
-import { LuaFactory } from 'wasmoon';
+import { LuaFactory } from 'npm:wasmoon@1.16.0';
 
 const DEFAULT_RUNTIME_OPTIONS = {
     openStandardLibs: true,

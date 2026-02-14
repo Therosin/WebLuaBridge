@@ -10,5 +10,5 @@ These are focused usage examples for the current bridge API.
 - `examples/lifecycle/init.lua`: lifecycle script used by `lifecycle-mainloop.ts`.
 
 ## Notes
-- Examples import from `../src/lua_bridge`.
-- They are intended as reference snippets and may need small runtime wiring depending on your host app/bundler.
+- Examples import from `../mod.ts` (public entrypoint).
+- Examples are written for Deno.

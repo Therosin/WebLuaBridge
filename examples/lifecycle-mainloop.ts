@@ -1,12 +1,10 @@
-import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import { createLuaBridge } from '../src/lua_bridge.ts';
+import { createLuaBridge } from '../mod.ts';
 
 export async function main({ intervalMs = 100, runMs = 450 } = {}) {
     const bridge = await createLuaBridge({ hostName: 'HostApp' });
     try {
-        const initLuaPath = fileURLToPath(new URL('./lifecycle/init.lua', import.meta.url) as any);
-        const initLua = await readFile(initLuaPath, 'utf8');
+        const initLuaPath = new URL('./lifecycle/init.lua', import.meta.url);
+        const initLua = await Deno.readTextFile(initLuaPath);
         await bridge.mountFile('init.lua', initLua);
 
         await bridge.start({ intervalMs });
@@ -17,9 +15,9 @@ export async function main({ intervalMs = 100, runMs = 450 } = {}) {
     }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === Deno.mainModule) {
     main().catch((error) => {
         console.error(error);
-        process.exitCode = 1;
+        Deno.exit(1);
     });
 }
