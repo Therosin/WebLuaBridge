@@ -8,6 +8,7 @@ These are focused usage examples for the current bridge API.
 - `examples/events-bridge.ts`: JS and Lua event rebroadcast via `Events:On/Emit`.
 - `examples/lifecycle-mainloop.ts`: `start()` / `shutdown()` lifecycle with JS-driven update loop.
 - `examples/lifecycle/init.lua`: lifecycle script used by `lifecycle-mainloop.ts`.
+- `tests/bridge.bindings.test.ts`: reference implementations for `LuaClass` and `@LuaBinder`/`@LuaBinding` decorators.
 
 ## Notes
 - Examples import from `../mod.ts` (public entrypoint).

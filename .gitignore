@@ -1,5 +1,4 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-/plans/**/*.plan.md
 
 # dependencies
 /node_modules
@@ -28,3 +27,12 @@ codealike.json
 
 # VS Code
 .vscode
+
+# deepwork state
+.slim/
+
+## local planning files
+# Ignore all `.plan.md` files in the plans directory and its subdirectories -- these are local planning files that should not be committed to the repository.
+# `*.plan.md` files should be used for tracking progress on tasks and projects and are specific to the local development environment.
+# Long term plans can go in `*.md` files, which are not ignored and can be committed to the repository for sharing with others.
+/plans/**/*.plan.md
