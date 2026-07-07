@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from 'jsr:@std/assert';
+import { assertEquals, assertRejects } from '@std/assert';
 import LuaBridge, { createLuaBridge, runLuaCode } from '../mod.ts';
 
 Deno.test('bridge: execute, mountFile/executeFile, and loadModule', async () => {
@@ -22,7 +22,7 @@ Deno.test('bridge: execute, mountFile/executeFile, and loadModule', async () => 
 Deno.test('bridge: validates loadModule input and not-initialized access', async () => {
     const bridge = await createLuaBridge();
     await assertRejects(
-        async () => bridge.loadModule('', 'return {}'),
+        () => bridge.loadModule('', 'return {}'),
         Error,
         'Module name must be a non-empty string',
     );
@@ -30,7 +30,7 @@ Deno.test('bridge: validates loadModule input and not-initialized access', async
 
     const notInit = new (await import('../mod.ts')).default();
     await assertRejects(
-        async () => notInit.execute('return 1'),
+        () => notInit.execute('return 1'),
         Error,
         'LuaBridge not initialized',
     );

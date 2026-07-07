@@ -56,6 +56,7 @@
  */
 
 import { LuaBindings, LuaBinder, LuaBinding } from '../lua/bindings.ts';
+import type { BindingContext } from '../lua/types.ts';
 
 type JsTimerId = ReturnType<typeof setTimeout>;
 
@@ -69,7 +70,7 @@ export class TimerBindings extends LuaBindings {
     private nextId = 1;
     private active = new Map<number, TimerEntry>();
 
-    constructor(ctx: any) {
+    constructor(ctx: BindingContext) {
         super(ctx);
     }
 
@@ -81,7 +82,7 @@ export class TimerBindings extends LuaBindings {
      * ```
      */
     @LuaBinding({ name: 'setTimeout' })
-    static setTimeout(callback: Function, delay: number): number {
+    static setTimeout(callback: (...args: unknown[]) => unknown, delay: number): number {
         if (typeof callback !== 'function') {
             throw new Error('setTimeout: first argument must be a function');
         }
@@ -110,7 +111,7 @@ export class TimerBindings extends LuaBindings {
      * ```
      */
     @LuaBinding({ name: 'setInterval' })
-    static setInterval(callback: Function, interval: number): number {
+    static setInterval(callback: (...args: unknown[]) => unknown, interval: number): number {
         if (typeof callback !== 'function') {
             throw new Error('setInterval: first argument must be a function');
         }
@@ -200,6 +201,14 @@ export class TimerBindings extends LuaBindings {
         return inst.active.size;
     }
 
+    /**
+     * Called by bridge.close() to cancel all pending timers.
+     * Ensures no dangling callbacks fire against a destroyed Lua state.
+     */
+    override close(): void {
+        TimerBindings.clearAll.call(this);
+    }
+
     // ------------------------------------------------------------------
     // Internal helpers
     // ------------------------------------------------------------------
@@ -222,4 +231,4 @@ export class TimerBindings extends LuaBindings {
     }
 }
 
-export default (ctx: any) => new TimerBindings(ctx);
+export default (ctx: BindingContext) => new TimerBindings(ctx);

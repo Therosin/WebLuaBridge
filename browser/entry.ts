@@ -10,8 +10,8 @@
  *   const result = await bridge.execute('return 40 + 2');
  *   console.log(result); // 42
  */
-import LuaBridge, { createLuaBridge as _createLuaBridge, runLuaCode as _runLuaCode } from '../src/lua_bridge.ts';
-import type { LuaBridgeOptions } from '../src/lua_bridge.ts';
+import LuaBridge, { createLuaBridge as _createLuaBridge, type runLuaCode as _runLuaCode } from '../src/lua/bridge.ts';
+import type { LuaBridgeOptions } from '../src/lua/types.ts';
 import { WASM_URI } from './wasm_inline.ts';
 
 export type {
@@ -22,13 +22,13 @@ export type {
     LuaExecutionContext,
     LuaRuntimeOptions,
     RuntimeStartOptions,
-} from '../src/lua_bridge.ts';
+} from '../src/lua/types.ts';
 
 /**
  * Create a LuaBridge with the inlined WASM runtime.
  * Automatically passes the self-contained WASM data URI.
  */
-export async function createLuaBridge<
+export function createLuaBridge<
     TGlobals extends Record<string, unknown> = Record<string, unknown>,
     TEvents extends Record<string, unknown[]> = Record<string, unknown[]>,
 >(
@@ -52,14 +52,3 @@ export async function runLuaCode<T = unknown>(code: string, ...args: unknown[]):
 
 export { LuaBridge };
 export default LuaBridge;
-
-// Re-export wasmoon types for consumer convenience
-export {
-    LuaMultiReturn,
-    LuaTimeoutError,
-    LuaType,
-    LuaReturn,
-    LuaLibraries,
-    LuaEventCodes,
-    LuaEventMasks,
-} from 'npm:wasmoon@1.16.0';

@@ -1,5 +1,5 @@
-import { assertEquals, assert, assertRejects } from 'jsr:@std/assert';
-import { createLuaBridge, runLuaCode } from '../mod.ts';
+import { assertEquals, assert, assertRejects, assertThrows } from '@std/assert';
+import { createLuaBridge, runLuaCode, BridgeError, LuaClass } from '../mod.ts';
 
 Deno.test('api: call() invokes a Lua function and returns value', async () => {
     const bridge = await createLuaBridge();
@@ -84,48 +84,48 @@ Deno.test('api: onPrint(null) restores original print', async () => {
     }
 });
 
-Deno.test('api: Get() reads deeply nested globals', async () => {
+Deno.test('api: getDeep() reads deeply nested globals', async () => {
     const bridge = await createLuaBridge();
     try {
         await bridge.execute(`
             config = { debug = true, limits = { max = 100, min = 0 } }
         `);
-        const max = await bridge.Get<number>('config.limits.max');
+        const max = await bridge.getDeep<number>('config.limits.max');
         assertEquals(max, 100);
 
-        const debug = await bridge.Get<boolean>('config.debug');
+        const debug = await bridge.getDeep<boolean>('config.debug');
         assertEquals(debug, true);
     } finally {
         bridge.close();
     }
 });
 
-Deno.test('api: Get() returns default for missing path', async () => {
+Deno.test('api: getDeep() returns default for missing path', async () => {
     const bridge = await createLuaBridge();
     try {
         await bridge.execute(`config = {}`);
-        const missing = await bridge.Get('config.nonexistent', 'fallback');
+        const missing = await bridge.getDeep('config.nonexistent', 'fallback');
         assertEquals(missing, 'fallback');
     } finally {
         bridge.close();
     }
 });
 
-Deno.test('api: Get() returns undefined for missing path without default', async () => {
+Deno.test('api: getDeep() returns undefined for missing path without default', async () => {
     const bridge = await createLuaBridge();
     try {
         await bridge.execute(`config = {}`);
-        const result = await bridge.Get('config.nonexistent');
+        const result = await bridge.getDeep('config.nonexistent');
         assertEquals(result, undefined);
     } finally {
         bridge.close();
     }
 });
 
-Deno.test('api: Set() writes deeply nested globals', async () => {
+Deno.test('api: setDeep() writes deeply nested globals', async () => {
     const bridge = await createLuaBridge();
     try {
-        await bridge.Set('game.player.name', 'Hero');
+        await bridge.setDeep('game.player.name', 'Hero');
         const name = await bridge.execute<string>('return game.player.name');
         assertEquals(name, 'Hero');
     } finally {
@@ -133,10 +133,10 @@ Deno.test('api: Set() writes deeply nested globals', async () => {
     }
 });
 
-Deno.test('api: Set() auto-creates intermediate tables', async () => {
+Deno.test('api: setDeep() auto-creates intermediate tables', async () => {
     const bridge = await createLuaBridge();
     try {
-        await bridge.Set('a.b.c.d', 42);
+        await bridge.setDeep('a.b.c.d', 42);
         const val = await bridge.execute<number>('return a.b.c.d');
         assertEquals(val, 42);
     } finally {
@@ -155,12 +155,12 @@ Deno.test('api: setGlobals() sets multiple globals at once', async () => {
     }
 });
 
-Deno.test('api: reset() allows re-initializing a closed bridge', async () => {
+Deno.test('api: reopen() allows re-initializing a closed bridge', async () => {
     const bridge = await createLuaBridge();
     try {
         await bridge.execute('return 1');
         bridge.close();
-        assertEquals(bridge.reset(), true);
+        assertEquals(bridge.reopen(), true);
         await bridge.init();
         const result = await bridge.execute<number>('return 40 + 2');
         assertEquals(result, 42);
@@ -169,10 +169,10 @@ Deno.test('api: reset() allows re-initializing a closed bridge', async () => {
     }
 });
 
-Deno.test('api: reset() returns false for non-closed bridge', async () => {
+Deno.test('api: reopen() returns false for non-closed bridge', async () => {
     const bridge = await createLuaBridge();
     try {
-        assertEquals(bridge.reset(), false);
+        assertEquals(bridge.reopen(), false);
     } finally {
         bridge.close();
     }
@@ -197,10 +197,10 @@ Deno.test('api: isStarted() and isMainLoopActive() reflect lifecycle state', asy
     }
 });
 
-Deno.test('api: executeSync runs code synchronously', async () => {
+Deno.test('api: executeRaw runs code synchronously', async () => {
     const bridge = await createLuaBridge();
     try {
-        const result = bridge.executeSync<number>('return 40 + 2');
+        const result = bridge.executeRaw<number>('return 40 + 2');
         assertEquals(result, 42);
     } finally {
         bridge.close();
@@ -327,7 +327,289 @@ Deno.test('api: error recovery — bridge works after Lua error', async () => {
     }
 });
 
+Deno.test('api: GetFunction returns callable handle', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        await bridge.execute('function add(a, b) return a + b end');
+        const add = bridge.GetFunction<(a: number, b: number) => number>('add');
+        const result = await add(40, 2);
+        assertEquals(result, 42);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: GetFunction resolves name at call time', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        await bridge.execute('fn = function() return "first" end');
+        const fn = bridge.GetFunction<() => string>('fn');
+        const r1 = await fn();
+        assertEquals(r1, 'first');
+
+        // Mutate the Lua function
+        await bridge.execute('fn = function() return "second" end');
+        const r2 = await fn();
+        assertEquals(r2, 'second');
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: GetFunction returns undefined for void functions', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        await bridge.execute('function noop() end');
+        const fn = bridge.GetFunction<() => undefined>('noop');
+        const result = await fn();
+        assertEquals(result, undefined);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: GetMethod calls with self binding', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        await bridge.execute(`
+            game = { name = "TestGame" }
+            function game.getPlayer(self, id)
+                return self.name .. ":player" .. id
+            end
+        `);
+        const getPlayer = bridge.GetMethod<(id: number) => string>('game.getPlayer');
+        const result = await getPlayer(42);
+        assertEquals(result, 'TestGame:player42');
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: GetMethod flat same as GetFunction', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        await bridge.execute('function greet(name) return "Hello " .. name end');
+        const greet = bridge.GetMethod<(name: string) => string>('greet');
+        const result = await greet('World');
+        assertEquals(result, 'Hello World');
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: GetMethod works with colon-defined method syntax', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        await bridge.execute(`
+            game = { name = "Test" }
+            function game:getInfo(id)
+                return self.name .. ":" .. id
+            end
+        `);
+        const getInfo = bridge.GetMethod<(id: number) => Promise<string>>('game.getInfo');
+        const result = await getInfo(42);
+        assertEquals(result, 'Test:42');
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: GetMethod throws on invalid paths', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        assertThrows(() => bridge.GetMethod('game.getPlayer; os.execute("rm")'), BridgeError);
+        assertThrows(() => bridge.GetMethod('a[b].c'), BridgeError);
+        assertThrows(() => bridge.GetMethod(''), BridgeError);
+        assertThrows(() => bridge.GetMethod('a..b'), BridgeError);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: GetMethod works with deeply nested path', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        await bridge.execute(`
+            a = { b = { c = { method = function(self, x) return x + 1 end } } }
+        `);
+        const fn = bridge.GetMethod<(x: number) => Promise<number>>('a.b.c.method');
+        const result = await fn(41);
+        assertEquals(result, 42);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: SetFunction sets JS function as Lua global', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        bridge.SetFunction('jsFunc', ((a: number, b: number) => a + b) as unknown as (...args: unknown[]) => unknown);
+        const result = await bridge.execute<number>('return jsFunc(40, 2)');
+        assertEquals(result, 42);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: SetMethod sets JS function as method', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        await bridge.execute('math = {}');
+        bridge.SetMethod('math.add', ((a: number, b: number) => a + b) as unknown as (...args: unknown[]) => unknown);
+        const result = await bridge.execute<number>('return math.add(40, 2)');
+        assertEquals(result, 42);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: SetFunction returns Promise and awaits Set', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        const fn = (x: number) => x * 2;
+        const result = bridge.SetFunction('setFnTest', fn);
+        assert(result instanceof Promise);
+        await result;
+        const val = await bridge.call<number>('setFnTest', 21);
+        assertEquals(val, 42);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: SetMethod returns Promise and awaits Set', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        await bridge.execute('math = {}');
+        const fn = (x: number) => x + 1;
+        const result = bridge.SetMethod('math.inc', fn);
+        assert(result instanceof Promise);
+        await result;
+        const val = await bridge.execute<number>('return math.inc(41)');
+        assertEquals(val, 42);
+    } finally {
+        bridge.close();
+    }
+});
+
 Deno.test('api: runLuaCode one-shot with args', async () => {
     const result = await runLuaCode<number>('return ... + 1', 41);
     assertEquals(result, 42);
+});
+
+Deno.test('api: Get flat global', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        await bridge.execute('x = 42');
+        const x = await bridge.Get<number>('x');
+        assertEquals(x, 42);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: Get dotted path', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        await bridge.execute('config = { limits = { max = 100 } }');
+        const max = await bridge.Get<number>('config.limits.max');
+        assertEquals(max, 100);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: Get returns default for missing path', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        await bridge.execute('config = {}');
+        const missing = await bridge.Get('config.nonexistent', 'fallback');
+        assertEquals(missing, 'fallback');
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: Get returns undefined for missing path without default', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        await bridge.execute('config = {}');
+        const result = await bridge.Get('config.nonexistent');
+        assertEquals(result, undefined);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: Get flat missing returns undefined', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        const result = await bridge.Get('nonexistent_key');
+        assertEquals(result, undefined);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: Set flat global', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        await bridge.Set('x', 42);
+        const x = await bridge.execute<number>('return x');
+        assertEquals(x, 42);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: Set dotted path with auto-created tables', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        await bridge.Set('a.b.c.d', 42);
+        const val = await bridge.execute<number>('return a.b.c.d');
+        assertEquals(val, 42);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: Set and Get round-trip dotted', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        await bridge.Set('profile.name', 'Hero');
+        const name = await bridge.Get<string>('profile.name');
+        assertEquals(name, 'Hero');
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: Set throws on LuaClass with dotted path', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        const cls = new LuaClass({ name: 'Test' }).method('foo', () => 'bar');
+        await assertRejects(
+            () => bridge.Set('nested.path.Test', cls),
+            BridgeError,
+        );
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('api: Set with dotted path survives reopen', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        await bridge.Set('config.deep.value', 42);
+        assertEquals(await bridge.Get('config.deep.value'), 42);
+
+        bridge.close();
+        bridge.reopen();
+        await bridge.init();
+
+        const val = await bridge.Get('config.deep.value');
+        assertEquals(val, 42);
+    } finally {
+        bridge.close();
+    }
 });

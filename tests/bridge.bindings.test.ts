@@ -17,7 +17,7 @@
  * along with WebLuaBridge.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { assertEquals, assert } from 'jsr:@std/assert';
+import { assertEquals, assert } from '@std/assert';
 import { createLuaBridge, LuaClass, LuaBindings, LuaBinder, LuaBinding } from '../mod.ts';
 import type { BindingContext } from '../src/lua/types.ts';
 
@@ -470,7 +470,7 @@ class TimerTestBindings extends LuaBindings {
     }
 
     @LuaBinding({ name: 'setTimeout' })
-    static setTimeout(callback: Function, delay: number): number {
+    static setTimeout(callback: (...args: unknown[]) => unknown, delay: number): number {
         const inst = this as unknown as TimerTestBindings;
         const id = inst.nextId++;
         const jsId = globalThis.setTimeout(() => {
@@ -482,7 +482,7 @@ class TimerTestBindings extends LuaBindings {
     }
 
     @LuaBinding({ name: 'setInterval' })
-    static setInterval(callback: Function, interval: number): number {
+    static setInterval(callback: (...args: unknown[]) => unknown, interval: number): number {
         const inst = this as unknown as TimerTestBindings;
         const id = inst.nextId++;
         const jsId = globalThis.setInterval(() => {

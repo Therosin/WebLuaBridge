@@ -64,7 +64,7 @@ function buildHelperCode(): string {
  *
  * Create one, add methods/values, configure readonly/callable/custom index,
  * then install it into the Lua state. LuaClass instances can also be passed
- * directly to `bridge.setGlobal()` — it will detect the type and install
+ * directly to `bridge.Set()` — it will detect the type and install
  * automatically.
  *
  * @example
@@ -98,7 +98,8 @@ export class LuaClass {
     }
 
     /** Add a method (JS function) to the Lua table. */
-    method(name: string, fn: Function): this {
+    // deno-lint-ignore no-explicit-any
+    method(name: string, fn: (...args: any[]) => unknown): this {
         if (typeof fn !== 'function') throw new Error(`LuaClass.method(${name}): value must be a function`);
         this._values.set(name, fn);
         return this;
@@ -123,6 +124,8 @@ export class LuaClass {
     }
 
     /** Provide a custom `__index` handler — a JS function called when Lua reads a missing key. */
+    // reason: Lua metatable index handler receives raw table reference
+    // deno-lint-ignore no-explicit-any
     index(handler: (self: any, key: string) => any): this {
         this._values.set('__index_handler', handler);
         this._options.hasCustomIndex = true;
@@ -130,6 +133,8 @@ export class LuaClass {
     }
 
     /** Provide a custom `__newindex` handler — called when Lua writes a key. */
+    // reason: Lua metatable index handler receives raw table reference
+    // deno-lint-ignore no-explicit-any
     newIndex(handler: (self: any, key: string, value: any) => void): this {
         this._values.set('__newindex_handler', handler);
         this._options.hasCustomNewIndex = true;
@@ -147,7 +152,7 @@ export class LuaClass {
 
     /**
      * Synchronously install this class into a Lua engine.
-     * Uses `doStringSync` internally. Called automatically by `bridge.setGlobal()`.
+     * Uses `doStringSync` internally. Called automatically by `bridge.Set()`.
      */
     installSync(lua: LuaEngineLike, name: string): void {
         this.ensureHelperSync(lua);

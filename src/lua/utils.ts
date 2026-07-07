@@ -32,8 +32,6 @@ export const DEFAULT_RUNTIME_OPTIONS = {
 export const NOT_INITIALIZED_ERROR = 'LuaBridge not initialized';
 /** Fallback error message for unknown throwable values. */
 export const UNKNOWN_ERROR = 'Unknown error';
-/** Internal global key used to pass scoped environment objects into Lua wrappers. */
-export const ENV_GLOBAL_NAME = '__lua_bridge_env';
 /** Optional lifecycle boot file checked during `start()`. */
 export const INIT_FILE = 'init.lua';
 /** Default JS timer interval used for the update loop. */
@@ -47,6 +45,9 @@ export const CALL_ON_SHUTDOWN_CODE = "local fn = _G.OnShutdown; if type(fn) == '
 /** Legacy argument global used by `executeFile` compatibility mode. */
 export const COMPAT_ARGS_GLOBAL = 'args';
 
+import type { ErrorCode } from './errors.ts';
+import { BridgeError, ErrorCodes } from './errors.ts';
+
 /** Convert unknown thrown values into stable user-facing error messages. */
 export const getErrorMessage = (error: unknown): string => {
     if (error instanceof Error && error.message) {
@@ -55,9 +56,44 @@ export const getErrorMessage = (error: unknown): string => {
     return UNKNOWN_ERROR;
 };
 
-/** Prefix internal errors with operation context for easier debugging. */
-export const toBridgeError = (context: string, error: unknown): Error =>
-    new Error(`${context}: ${getErrorMessage(error)}`);
+/**
+ * Detect whether a Lua error message is a syntax/parse error vs a runtime error.
+ *
+ * Lua 5.4 syntax errors have characteristic tokens like `expected near`.
+ * Runtime errors (from `error()` calls, nil-index, etc.) do not.
+ * Both are prefixed with `[string "..."]` by wasmoon, so we must inspect the
+ * *content* of the message, not just the prefix.
+ */
+const SYNTAX_PATTERNS = [
+    /\bexpected near\b/,
+    /\bunexpected symbol\b/,
+    /\bmalformed number\b/,
+    /\binvalid escape sequence\b/,
+];
+
+function isLuaSyntaxError(message: string): boolean {
+    return SYNTAX_PATTERNS.some((re) => re.test(message));
+}
+
+function detectCode(contextCode: ErrorCode, error: unknown): ErrorCode {
+    if (contextCode === ErrorCodes.EXECUTION) {
+        const msg = getErrorMessage(error);
+        if (isLuaSyntaxError(msg)) {
+            return ErrorCodes.SYNTAX;
+        }
+    }
+    return contextCode;
+}
+
+/** Wraps an error into a structured BridgeError with a code. */
+export const toBridgeError = (context: string, error: unknown, code: ErrorCode = ErrorCodes.EXECUTION): BridgeError => {
+    // If error is already a BridgeError, preserve its code — just enrich the message
+    if (error instanceof BridgeError) {
+        return new BridgeError(`${context}: ${error.message}`, error.code, error);
+    }
+    const resolvedCode = detectCode(code, error);
+    return new BridgeError(`${context}: ${getErrorMessage(error)}`, resolvedCode, error);
+};
 
 /** Narrow unknown values to plain object records. */
 export const isObject = (value: unknown): value is Record<string, unknown> =>

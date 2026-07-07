@@ -1,4 +1,6 @@
-import LuaBridge, { createLuaBridge, runLuaCode, LuaClass, LuaBindings } from './src/lua_bridge.ts';
+import LuaBridge, { createLuaBridge, runLuaCode } from './src/lua/bridge.ts';
+import { LuaClass } from './src/lua/lua_class.ts';
+import { LuaBindings } from './src/lua/bindings.ts';
 export type {
     EventHandler,
     LuaBridgeEventApi,
@@ -19,15 +21,6 @@ export type {
 
 export { createLuaBridge, runLuaCode, LuaClass, LuaBindings };
 export { LuaBinder, LuaBinding } from './src/lua/bindings.ts';
+export { BridgeError, ErrorCodes } from './src/lua/errors.ts';
+export type { ErrorCode } from './src/lua/errors.ts';
 export default LuaBridge;
-
-// Re-export wasmoon types for consumer convenience
-export {
-    LuaMultiReturn,
-    LuaTimeoutError,
-    LuaType,
-    LuaReturn,
-    LuaLibraries,
-    LuaEventCodes,
-    LuaEventMasks,
-} from 'npm:wasmoon@1.16.0';

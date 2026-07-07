@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from 'jsr:@std/assert';
+import { assertEquals, assertRejects } from '@std/assert';
 import { createLuaBridge } from '../mod.ts';
 
 Deno.test('bridge: useEnvironment mutates JS env and returns values', async () => {
@@ -56,7 +56,7 @@ Deno.test('bridge: useEnvironment rejects invalid env', async () => {
     const bridge = await createLuaBridge();
     try {
         await assertRejects(
-            async () => bridge.useEnvironment(null as unknown as Record<string, unknown>),
+            () => bridge.useEnvironment(null as unknown as Record<string, unknown>),
             Error,
             'Environment must be an object',
         );
@@ -74,9 +74,9 @@ Deno.test('bridge: useEnvironment keeps environment binding inside execution loc
     const secondPlugin = await bridge.useEnvironment(secondEnv);
 
     const originalWithExecutionLock = bridge.withExecutionLock.bind(bridge);
-    let releaseFirstLock: (() => void) | null = null;
+    let releaseFirstLock!: () => void;
     const firstLockGate = new Promise<void>((resolve) => {
-        releaseFirstLock = resolve;
+        releaseFirstLock = resolve as () => void;
     });
     let invocationCount = 0;
 

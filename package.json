@@ -1,0 +1,34 @@
+{
+  "name": "webluabridge",
+  "version": "0.2.0",
+  "description": "Embed a Lua 5.4 runtime in your TypeScript application — run user scripts, build plugin systems, or add modding support.",
+  "keywords": ["lua", "wasm", "webassembly", "scripting", "plugin", "sandbox"],
+  "homepage": "https://github.com/Therosin/WebLuaBridge",
+  "bugs": "https://github.com/Therosin/WebLuaBridge/issues",
+  "license": "GPL-3.0",
+  "author": "Theros (https://github.com/therosin)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Therosin/WebLuaBridge.git"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "deno": "./mod.ts",
+      "import": "./dist/webluabridge.bundle.js",
+      "default": "./dist/webluabridge.bundle.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "mod.ts",
+    "src/",
+    "common.lua",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  }
+}

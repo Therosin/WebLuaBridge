@@ -33,6 +33,7 @@
  */
 
 import { LuaBindings, LuaBinder, LuaBinding } from '../lua/bindings.ts';
+import type { BindingContext } from '../lua/types.ts';
 
 @LuaBinder({ namespace: 'regex' })
 export class RegexBindings extends LuaBindings {
@@ -95,4 +96,4 @@ export class RegexBindings extends LuaBindings {
     }
 }
 
-export default (ctx: any) => new RegexBindings(ctx);
+export default (ctx: BindingContext) => new RegexBindings(ctx);

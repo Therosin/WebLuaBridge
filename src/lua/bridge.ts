@@ -17,12 +17,10 @@
  * along with WebLuaBridge.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { LuaFactory } from 'npm:wasmoon@1.16.0';
-import { COMMON_LUA_SOURCE } from '../common_lua_content.ts';
+import { LuaFactory } from 'wasmoon';
 
 import type {
     LuaEngine,
-    LuaGlobalHandle,
     LuaBridgeOptions,
     LuaRuntimeOptions,
     RuntimeStartOptions,
@@ -39,27 +37,20 @@ import type {
 import { BridgeEventBus } from './events.ts';
 import {
     NOT_INITIALIZED_ERROR,
-    UNKNOWN_ERROR,
-    ENV_GLOBAL_NAME,
     INIT_FILE,
-    DEFAULT_TICK_INTERVAL_MS,
     CALL_ON_INIT_CODE,
     CALL_UPDATE_CODE,
     CALL_ON_SHUTDOWN_CODE,
-    COMPAT_ARGS_GLOBAL,
-    DEFAULT_RUNTIME_OPTIONS,
-    getErrorMessage,
     toBridgeError,
-    isObject,
-    toLuaLongString,
     normalizeRuntimeOptions,
     normalizeMainLoopInterval,
-    luaWrap,
-    unwrapTablePack,
-    wrapForMultiReturn,
 } from './utils.ts';
 import { LuaBindings } from './bindings.ts';
 import { LuaClass } from './lua_class.ts';
+import { BridgeError, ErrorCodes } from './errors.ts';
+import { VfsRegistry } from './vfs.ts';
+import { ExecutionService } from './execution.ts';
+import { EnvironmentService } from './environment.ts';
 
 /**
  * Type-safe Lua runtime bridge backed by Wasmoon.
@@ -68,7 +59,7 @@ import { LuaClass } from './lua_class.ts';
  * - `TGlobals`: shape of injected globals for stronger key/value IntelliSense.
  * - `TEvents`: typed event payload map for `on/off/emit` helpers.
  */
-class LuaBridge<
+export class LuaBridge<
     TGlobals extends LuaBridgeGlobals = LuaBridgeGlobals,
     TEvents extends LuaBridgeEventMap = LuaBridgeEventMap,
 > implements LuaBridgeEventApi<TEvents> {
@@ -86,22 +77,29 @@ class LuaBridge<
     private eventBus: BridgeEventBus<TEvents>;
     /** Object injected into `_G.Events` for Lua code. */
     private eventsApi: BridgeEventsApi;
-    /** Mounted file paths tracked for lifecycle startup logic. */
-    private mountedFiles: Set<string>;
     /** Indicates whether lifecycle mode has been started. */
     private started: boolean;
     /** Mutable state used by JS main loop scheduling. */
     private mainLoop: RuntimeLoopState;
     /** Promise chain used as an async mutex for runtime operations. */
     private executionQueue: Promise<unknown>;
+    /** Reentrancy guard — set while a lock-holder is actively executing. */
+    private inLock = false;
     /** Monotonic counter used to generate unique `_G` temporary keys. */
     private argsKeyCounter: number;
-    /** Files to mount during init(). */
-    private pendingFiles: Record<string, string>;
     /** Binding factories to install during init(). */
     private pendingBindings: LuaBindingFactory[];
-    /** Stored original print function when print capture is active. */
-    private originalPrint: unknown = null;
+    /** Active binding instances (for cleanup on close). */
+    private activeBindings: LuaBindings[];
+    /** Stored original print function when print capture is active (shared mutable ref). */
+    private originalPrintRef: { current: unknown } = { current: null };
+
+    /** Composed VfsRegistry managing pending/mounted file lifecycle. */
+    private vfs: VfsRegistry;
+    /** Composed ExecutionService for Lua execution and globals. */
+    private executionService!: ExecutionService;
+    /** Composed EnvironmentService for scoped execution contexts. */
+    private environmentService!: EnvironmentService;
 
     /**
      * Create a new bridge instance.
@@ -113,15 +111,15 @@ class LuaBridge<
         const { mainLoopIntervalMs, wasmUri, files, bindings, ...runtimeOptions } = options;
 
         this.factory = wasmUri ? new LuaFactory(wasmUri) : new LuaFactory();
+        this.vfs = new VfsRegistry(this.factory);
         this.globals = globals;
         this.runtimeOptions = normalizeRuntimeOptions(runtimeOptions);
         this.lua = null;
         this.state = 'new';
         this.eventBus = new BridgeEventBus<TEvents>();
         this.eventsApi = this.createEventsApi();
-        this.mountedFiles = new Set();
-        this.pendingFiles = files || {};
         this.pendingBindings = bindings || [];
+        this.activeBindings = [];
         this.started = false;
         this.mainLoop = {
             active: false,
@@ -132,12 +130,19 @@ class LuaBridge<
         };
         this.executionQueue = Promise.resolve();
         this.argsKeyCounter = 0;
+
+        // Register pending files via VfsRegistry instead of raw record
+        if (files) {
+            for (const [path, content] of Object.entries(files)) {
+                this.vfs.addPending(path, content);
+            }
+        }
     }
 
     /** Throw when runtime-dependent methods are used before initialization. */
     private assertInitialized(): void {
         if (!this.lua) {
-            throw new Error(NOT_INITIALIZED_ERROR);
+            throw new BridgeError(NOT_INITIALIZED_ERROR, ErrorCodes.NOT_INITIALIZED);
         }
     }
 
@@ -147,13 +152,58 @@ class LuaBridge<
         return this.lua as LuaEngine;
     }
 
+    /** Throw a MEMORY error when Lua heap is near the cap. */
+    private checkMemoryLimit(): void {
+        let max: number | undefined;
+        try {
+            max = this.executionService.getMemoryMax();
+        } catch {
+            return; // tracing disabled — skip check
+        }
+        if (max === undefined) return; // no cap set
+        const used = this.executionService.getMemoryUsed();
+        const ratio = used / max;
+        if (ratio > 0.9) {
+            throw new BridgeError(
+                `Lua memory usage (${Math.round(ratio * 100)}%) exceeds 90% cap — refusing to execute`,
+                ErrorCodes.MEMORY,
+            );
+        }
+    }
+
     /**
-     * Serialize runtime operations through a single promise queue.
+     * Advanced: execute an operation under the bridge's serial execution lock.
      *
-     * Public to preserve current test hooks and advanced integration scenarios.
+     * When an `AbortSignal` is provided, the operation will be rejected
+     * with `CANCELLED` if the signal is already aborted or becomes
+     * aborted while waiting in the queue. Once the operation starts
+     * executing, the signal is ignored.
+     *
+     * Accepts an optional AbortSignal to cancel before execution starts.
      */
-    async withExecutionLock<T>(operation: () => Promise<T>): Promise<T> {
-        const run = this.executionQueue.then(operation);
+    async withExecutionLock<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+        if (signal?.aborted) {
+            throw new BridgeError('Operation cancelled', ErrorCodes.CANCELLED);
+        }
+        this.checkMemoryLimit();
+
+        // Reentrant: already holding the lock — run directly without queueing
+        if (this.inLock) {
+            return await operation();
+        }
+
+        const run = this.executionQueue.then(async () => {
+            if (signal?.aborted) {
+                throw new BridgeError('Operation cancelled', ErrorCodes.CANCELLED);
+            }
+            this.inLock = true;
+            try {
+                return await operation();
+            } finally {
+                this.inLock = false;
+            }
+        });
+
         this.executionQueue = run.catch(() => undefined);
         return await run;
     }
@@ -162,26 +212,6 @@ class LuaBridge<
     private nextArgsKey(): string {
         this.argsKeyCounter += 1;
         return `__lua_bridge_args_${this.argsKeyCounter}`;
-    }
-
-    /**
-     * Set compatibility `args` global only for duration of a file execution.
-     *
-     * This supports legacy scripts that read `_G.args` instead of varargs.
-     */
-    private async withScopedCompatArgs<T>(args: unknown[], operation: () => Promise<T>): Promise<T> {
-        if (!args || args.length === 0) {
-            return await operation();
-        }
-
-        const lua = this.getLua();
-        const previousArgs = lua.global.get(COMPAT_ARGS_GLOBAL);
-        lua.global.set(COMPAT_ARGS_GLOBAL, args);
-        try {
-            return await operation();
-        } finally {
-            lua.global.set(COMPAT_ARGS_GLOBAL, previousArgs);
-        }
     }
 
     /**
@@ -198,6 +228,23 @@ class LuaBridge<
             this.lua = (await this.factory.createEngine(this.runtimeOptions)) as unknown as LuaEngine;
             this.lua.global.set('Events', this.eventsApi);
 
+            // Create composed services after engine is available
+            this.executionService = new ExecutionService({
+                getLua: () => this.getLua(),
+                withExecutionLock: <T>(op: () => Promise<T>) => this.withExecutionLock(op),
+                nextArgsKey: () => this.nextArgsKey(),
+                originalPrint: this.originalPrintRef,
+            });
+
+            this.environmentService = new EnvironmentService({
+                getLua: () => this.getLua(),
+                executeInCurrentLock: <T>(code: string, ...args: unknown[]) =>
+                    this.executionService.executeInCurrentLock<T>(code, ...args),
+                withExecutionLock: <T>(op: () => Promise<T>) => this.withExecutionLock(op),
+                mountFile: (path: string, content: string) => this.vfs.mount(path, content),
+                getEventsApiIdentity: () => this.eventsApi,
+            });
+
             for (const [name, value] of Object.entries(this.globals)) {
                 if (value instanceof LuaClass) {
                     value.installSync(this.lua, name);
@@ -206,14 +253,8 @@ class LuaBridge<
                 }
             }
 
-            // Mount any pre-configured files
-            if (this.pendingFiles) {
-                for (const [path, content] of Object.entries(this.pendingFiles)) {
-                    await this.factory.mountFile(path, content);
-                    this.mountedFiles.add(path);
-                }
-                this.pendingFiles = {};
-            }
+            // Mount any pre-configured files via VfsRegistry
+            await this.vfs.mountPending();
 
             this.state = 'initialized';
 
@@ -223,12 +264,13 @@ class LuaBridge<
                     const binding = factory({ bridge: this });
                     if (binding instanceof LuaBindings) {
                         await binding.install(this.lua);
+                        this.activeBindings.push(binding);
                     }
                 }
                 this.pendingBindings = [];
             }
         } catch (error) {
-            throw toBridgeError('Failed to initialize LuaBridge', error);
+            throw toBridgeError('Failed to initialize LuaBridge', error, ErrorCodes.NOT_INITIALIZED);
         }
     }
 
@@ -239,6 +281,17 @@ class LuaBridge<
      */
     close(): void {
         this.stopMainLoop();
+
+        // Notify active bindings so they can release resources
+        for (const binding of this.activeBindings) {
+            try {
+                binding.close();
+            } catch {
+                // Swallow per-binding cleanup errors
+            }
+        }
+        this.activeBindings = [];
+
         if (!this.lua) {
             this.state = 'closed';
             this.started = false;
@@ -251,7 +304,7 @@ class LuaBridge<
             this.state = 'closed';
             this.started = false;
         } catch (error) {
-            throw toBridgeError('Failed to close LuaBridge', error);
+            throw toBridgeError('Failed to close LuaBridge', error, ErrorCodes.CLOSE);
         }
     }
 
@@ -349,14 +402,14 @@ class LuaBridge<
         await this.init();
 
         try {
-            if (this.mountedFiles.has(INIT_FILE)) {
+            if (this.vfs.has(INIT_FILE)) {
                 await this.executeFile(INIT_FILE);
             }
             await this.execute(CALL_ON_INIT_CODE);
             this.startMainLoop(intervalMs);
             this.started = true;
         } catch (error) {
-            throw toBridgeError('Failed to start LuaBridge', error);
+            throw toBridgeError('Failed to start LuaBridge', error, ErrorCodes.START);
         }
     }
 
@@ -380,7 +433,7 @@ class LuaBridge<
         try {
             await this.execute(CALL_ON_SHUTDOWN_CODE);
         } catch (error) {
-            throw toBridgeError('Failed to shutdown LuaBridge', error);
+            throw toBridgeError('Failed to shutdown LuaBridge', error, ErrorCodes.SHUTDOWN);
         } finally {
             this.close();
         }
@@ -435,7 +488,10 @@ class LuaBridge<
     /** Register listener for a strongly typed event key. */
     on<K extends keyof TEvents & string>(event: K, handler: EventHandler<TEvents[K]>): () => boolean;
     /** Register listener for dynamic/untyped event keys. */
-    on(event: string, handler: EventHandler): () => boolean;
+    // deno-lint-ignore no-explicit-any
+    on(event: string, handler: EventHandler<any[]>): () => boolean;
+    // reason: implementation must accept all overload variants
+    // deno-lint-ignore no-explicit-any
     on(event: string, handler: (...args: any[]) => void): () => boolean {
         return this.eventBus.on(event, handler);
     }
@@ -443,7 +499,10 @@ class LuaBridge<
     /** Unregister listener for a strongly typed event key. */
     off<K extends keyof TEvents & string>(event: K, handler: EventHandler<TEvents[K]>): boolean;
     /** Unregister listener for dynamic/untyped event keys. */
-    off(event: string, handler: EventHandler): boolean;
+    // deno-lint-ignore no-explicit-any
+    off(event: string, handler: EventHandler<any[]>): boolean;
+    // reason: implementation must accept all overload variants
+    // deno-lint-ignore no-explicit-any
     off(event: string, handler: (...args: any[]) => void): boolean {
         return this.eventBus.off(event, handler);
     }
@@ -471,14 +530,14 @@ class LuaBridge<
     }
 
     /**
-     * Reset a closed bridge so it can be re-initialized.
+     * Reopen a closed bridge so it can be re-initialized.
      *
      * This clears the closed state and allows `init()` or `start()` to be called again.
      * All previously mounted files and event listeners are preserved.
      *
-     * @returns `true` if reset was performed, `false` if bridge was not in closed state.
+     * @returns `true` if reopen was performed, `false` if bridge was not in closed state.
      */
-    reset(): boolean {
+    reopen(): boolean {
         if (this.state !== 'closed') {
             return false;
         }
@@ -490,17 +549,18 @@ class LuaBridge<
      * Set multiple globals at once.
      *
      * @param values A map of global names to values.
+     * @deprecated Use {@link Set} with individual calls instead. Will be removed in a future version.
      */
     setGlobals(values: Record<string, unknown>): void {
-        for (const [name, value] of Object.entries(values)) {
-            this.setGlobal(name, value);
-        }
+        this.getLua();
+        this.executionService.setGlobals(values);
     }
 
     /**
      * Set global in both local cache and active Lua runtime.
      *
      * Strongly typed for known keys in `TGlobals`.
+     * @deprecated Use {@link Set} instead. Will be removed in a future version.
      */
     setGlobal<K extends keyof TGlobals & string>(name: K, value: TGlobals[K]): void;
     /** Set global by dynamic key when shape is not known at compile time. */
@@ -511,29 +571,23 @@ class LuaBridge<
             this.globals[name as keyof TGlobals] = value as TGlobals[keyof TGlobals];
             return;
         }
-        try {
-            const lua = this.getLua();
-            this.globals[name as keyof TGlobals] = value as TGlobals[keyof TGlobals];
-            lua.global.set(name, value);
-        } catch (error) {
-            throw toBridgeError('Failed to set global', error);
-        }
+        this.getLua();
+        this.globals[name as keyof TGlobals] = value as TGlobals[keyof TGlobals];
+        this.executionService.setGlobal(name, value);
     }
 
     /**
      * Read global value from active Lua runtime.
      *
      * Prefer keyed overload when global shape is known.
+     * @deprecated Use {@link Get} instead. Will be removed in a future version.
      */
     getGlobal<K extends keyof TGlobals & string>(name: K): TGlobals[K];
     /** Read global value by dynamic key and optional generic type. */
     getGlobal<T = unknown>(name: string): T;
     getGlobal<T = unknown>(name: string): T {
-        try {
-            return this.getLua().global.get<T>(name);
-        } catch (error) {
-            throw toBridgeError('Failed to get global', error);
-        }
+        this.getLua();
+        return this.executionService.getGlobal<T>(name);
     }
 
     /**
@@ -545,29 +599,15 @@ class LuaBridge<
      * @example
      * ```ts
      * await bridge.execute('config = { debug = true, limits = { max = 100 } }');
-     * const max = await bridge.Get('config.limits.max');     // 100
-     * const dbg = await bridge.Get('config.debug', false);     // true
-     * const missing = await bridge.Get('config.foo', 'fallback'); // 'fallback'
+     * const max = await bridge.getDeep('config.limits.max');     // 100
+     * const dbg = await bridge.getDeep('config.debug', false);     // true
+     * const missing = await bridge.getDeep('config.foo', 'fallback'); // 'fallback'
      * ```
+     * @deprecated Use {@link Get} instead. Will be removed in a future version.
      */
-    async Get<T = unknown>(path: string, defaultValue?: T): Promise<T | undefined> {
+    async getDeep<T = unknown>(path: string, defaultValue?: T): Promise<T | undefined> {
         this.getLua();
-        const safePath = toLuaLongString(path);
-        return await this.withExecutionLock(async () => {
-            return await this.executeInCurrentLock<T | undefined>(
-                `
-                    local val = _G
-                    for part in string.gmatch(${safePath}, "[^.]+") do
-                        val = val[part]
-                        if val == nil then
-                            return ...
-                        end
-                    end
-                    return val
-                `,
-                defaultValue,
-            );
-        });
+        return await this.executionService.getDeep(path, defaultValue);
     }
 
     /**
@@ -578,49 +618,194 @@ class LuaBridge<
      *
      * @example
      * ```ts
-     * await bridge.Set('config.limits.max', 200);
+     * await bridge.setDeep('config.limits.max', 200);
      * // equivalent to: _G.config = _G.config or {}; config.limits = config.limits or {}; config.limits.max = 200
+     * ```
+     * @deprecated Use {@link Set} instead. Will be removed in a future version.
+     */
+    async setDeep(path: string, value: unknown): Promise<void> {
+        this.getLua();
+        await this.executionService.setDeep(path, value);
+    }
+
+    /**
+     * Read a value from the Lua global namespace using a dot-delimited path.
+     *
+     * - Flat keys (no dots) → synchronous `_G` lookup via `getGlobal`.
+     * - Dotted keys → async table traversal via `getDeep`.
+     * - Returns `defaultValue` when the path is missing, or `undefined` if no default.
+     * - `null` from wasmoon is normalized to `undefined` for consistency.
+     *
+     * @typeParam T - Expected return type.
+     * @param path - Global key or dot-delimited path (e.g. `"x"` or `"config.limits.max"`).
+     * @param defaultValue - Optional fallback when the value is missing.
+     *
+     * @example
+     * ```ts
+     * const x = await bridge.Get<number>('x');
+     * const max = await bridge.Get<number>('config.limits.max', 100);
+     * ```
+     */
+    Get<K extends keyof TGlobals & string>(path: K): Promise<TGlobals[K]>;
+    Get<T = unknown>(path: string, defaultValue?: T): Promise<T | undefined>;
+    async Get<T = unknown>(path: string, defaultValue?: T): Promise<T | undefined> {
+        this.getLua();
+        if (path.includes('.')) {
+            return await this.executionService.getDeep<T | undefined>(path, defaultValue);
+        }
+        const raw = this.executionService.getGlobal<T | null>(path);
+        const v: T | undefined = raw === null ? undefined : raw as T;
+        return v !== undefined ? v : defaultValue;
+    }
+
+    /**
+     * Write a value into the Lua global namespace using a dot-delimited path.
+     *
+     * - `value instanceof LuaClass` → uses `installSync` (flat paths only).
+     * - Flat keys (no dots) → synchronous `_G` write via `setGlobal`.
+     * - Dotted keys → async table traversal with auto-created intermediates via `setDeep`.
+     * - The internal globals cache is updated for flat keys.
+     *
+     * @param path - Global key or dot-delimited path (e.g. `"x"` or `"config.limits.max"`).
+     * @param value - Value to set. LuaClass instances are installed specially.
+     *
+     * @example
+     * ```ts
+     * await bridge.Set('x', 42);
+     * await bridge.Set('config.limits.max', 200);
      * ```
      */
     async Set(path: string, value: unknown): Promise<void> {
         this.getLua();
-        return await this.withExecutionLock(async () => {
-            try {
-                const safePath = toLuaLongString(path);
-                await this.executeInCurrentLock(
-                    `
-                        local parts = {}
-                        for part in string.gmatch(${safePath}, "[^.]+") do
-                            parts[#parts + 1] = part
-                        end
-                        if #parts == 0 then error("empty path") end
-                        local obj = _G
-                        for i = 1, #parts - 1 do
-                            if obj[parts[i]] == nil then
-                                obj[parts[i]] = {}
-                            end
-                            obj = obj[parts[i]]
-                        end
-                        obj[parts[#parts]] = ...
-                    `,
-                    value,
-                );
-            } catch (error) {
-                throw toBridgeError(`Failed to set path '${path}'`, error);
+        if (value instanceof LuaClass) {
+            if (path.includes('.')) {
+                throw new BridgeError('LuaClass install only supports flat paths', ErrorCodes.SET_GLOBAL);
             }
-        });
+            value.installSync(this.getLua(), path);
+            this.globals[path as keyof TGlobals] = value as TGlobals[keyof TGlobals];
+            return;
+        }
+        if (path.includes('.')) {
+            await this.executionService.setDeep(path, value);
+            // Also update the globals cache so reopen/init preserves dotted writes
+            const parts = path.split('.');
+            let cursor: Record<string, unknown> = this.globals as unknown as Record<string, unknown>;
+            for (let i = 0; i < parts.length - 1; i++) {
+                const part = parts[i];
+                if (!(part in cursor) || typeof cursor[part] !== 'object' || cursor[part] === null) {
+                    cursor[part] = {};
+                }
+                cursor = cursor[part] as Record<string, unknown>;
+            }
+            cursor[parts[parts.length - 1]] = value as TGlobals[keyof TGlobals];
+            return;
+        }
+        this.globals[path as keyof TGlobals] = value as TGlobals[keyof TGlobals];
+        this.executionService.setGlobal(path, value);
     }
 
-    /** Set a field on a global Lua table. */
-    setField(tableName: string, field: string, value: unknown): void {
-        try {
-            const lua = this.getLua();
-            lua.global.getTable(tableName, (index: number) => {
-                lua.global.setField(index, field, value);
-            });
-        } catch (error) {
-            throw toBridgeError('Failed to set field', error);
+    /**
+     * Get a callable handle to a Lua global function.
+     *
+     * Returns a fresh JS wrapper each call (no caching). The wrapper
+     * resolves the function name at call time, reflecting Lua state
+     * mutations between calls.
+     *
+     * @typeParam T - Function signature for typing.
+     * @param name - Lua global function name.
+     *
+     * @example
+     * ```ts
+     * const add = bridge.GetFunction<(a: number, b: number) => number>('add');
+     * const sum = await add(40, 2); // 42
+     * ```
+     */
+    // deno-lint-ignore no-explicit-any
+    GetFunction<T extends (...args: any[]) => unknown>(name: string): T {
+        this.getLua();
+        // Fresh wrapper per call — no caching. Resolves name at call time.
+        return ((...args: unknown[]) => this.call(name, ...args)) as unknown as T;
+    }
+
+    /**
+     * Get a callable handle to a Lua method with `self` binding.
+     *
+     * For dotted paths like `"game.getPlayer"`, the parent table (`_G.game`)
+     * is resolved fresh each call and passed as the first argument (`self`),
+     * matching Lua's `obj:method(args)` calling convention.
+     *
+     * For flat names (no dots), behaves identically to `GetFunction`.
+     *
+     * Throws a `BridgeError` (code `LUA_EXECUTION_ERROR`) if the method
+     * cannot be resolved (e.g., parent path doesn't exist or is not a table).
+     *
+     * @typeParam T - Method signature for typing.
+     * @param path - Method path, e.g. `"game.getPlayer"` or `"table.method"`.
+     *
+     * @example
+     * ```ts
+     * const getPlayer = bridge.GetMethod<(id: number) => Player>('game.getPlayer');
+     * const player = await getPlayer(42); // calls _G.game.getPlayer(_G.game, 42)
+     * ```
+     */
+    // deno-lint-ignore no-explicit-any
+    GetMethod<T extends (...args: any[]) => unknown>(path: string): T {
+        this.getLua();
+        const SAFE_PATH = /^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$/;
+        if (!SAFE_PATH.test(path)) {
+            throw new BridgeError(
+                `Invalid method path: ${path}. Only dot-delimited identifier paths are supported.`,
+                ErrorCodes.CALL,
+            );
         }
+        const lastDot = path.lastIndexOf('.');
+        if (lastDot === -1) {
+            return this.GetFunction<T>(path);
+        }
+        const methodName = path.slice(lastDot + 1);
+        return (async (...args: unknown[]) => {
+            // Resolve parent via Lua: local self = <parent_path>; return self.<method>(self, ...)
+            return await this.execute(
+                `local self = ${path.slice(0, lastDot)}\nreturn self.${methodName}(self, ...)`,
+                ...args,
+            );
+        }) as unknown as T;
+    }
+
+    /**
+     * Set a JS function as a Lua global.
+     *
+     * Thin wrapper around `Set` for documentation clarity.
+     *
+     * @param name - Global function name.
+     * @param fn - JS function to expose.
+     */
+    // deno-lint-ignore no-explicit-any
+    async SetFunction<T extends (...args: any[]) => unknown>(name: string, fn: T): Promise<void> {
+        await this.Set(name, fn);
+    }
+
+    /**
+     * Set a JS function as a method on a Lua table.
+     *
+     * Thin wrapper around `Set` for documentation clarity.
+     *
+     * @param path - Dot-delimited path, e.g. `"game.getPlayer"`.
+     * @param fn - JS function to expose.
+     */
+    // deno-lint-ignore no-explicit-any
+    async SetMethod<T extends (...args: any[]) => unknown>(path: string, fn: T): Promise<void> {
+        await this.Set(path, fn);
+    }
+
+    /**
+     * Set a field on a global Lua table.
+     *
+     * @deprecated Use {@link Set} with a dotted path (e.g., `Set("table.field", value)`) instead. Will be removed in a future version.
+     */
+    setField(tableName: string, field: string, value: unknown): void {
+        this.getLua();
+        this.executionService.setField(tableName, field, value);
     }
 
     /**
@@ -636,17 +821,8 @@ class LuaBridge<
      * @param injectGlobals If true, also injects `Detour`, `OnlyRunOnce`, `ReadOnly`, and `Class` into `_G`.
      */
     async loadCommon(injectGlobals: boolean = false): Promise<void> {
-        await this.loadModule('common', COMMON_LUA_SOURCE);
-        if (injectGlobals) {
-            const lua = this.getLua();
-            await this.execute(`
-                local _common = require("common")
-                Detour = _common.Detour
-                OnlyRunOnce = _common.OnlyRunOnce
-                ReadOnly = _common.ReadOnly
-                Class = _common.Class
-            `);
-        }
+        this.getLua();
+        await this.executionService.loadCommon(injectGlobals);
     }
 
     /**
@@ -665,24 +841,8 @@ class LuaBridge<
      * ```
      */
     onPrint(callback: ((message: string) => void) | null): void {
-        const lua = this.getLua();
-        if (callback) {
-            // Store original and override
-            if (this.originalPrint === null) {
-                this.originalPrint = lua.global.get('print');
-            }
-            // Wrap in a Lua-compatible function that formats like Lua's print
-            lua.global.set('print', (...args: unknown[]) => {
-                const formatted = args.map((a) => String(a)).join('\t');
-                callback(formatted);
-            });
-        } else {
-            // Restore original
-            if (this.originalPrint !== null) {
-                lua.global.set('print', this.originalPrint);
-                this.originalPrint = null;
-            }
-        }
+        this.getLua();
+        this.executionService.onPrint(callback);
     }
 
     /**
@@ -692,11 +852,8 @@ class LuaBridge<
      * @returns Memory used in bytes, or 0 if not available.
      */
     getMemoryUsed(): number {
-        try {
-            return this.getLua().global.getMemoryUsed();
-        } catch (error) {
-            throw toBridgeError('Failed to get memory usage', error);
-        }
+        this.getLua();
+        return this.executionService.getMemoryUsed();
     }
 
     /**
@@ -705,11 +862,8 @@ class LuaBridge<
      * @returns Maximum memory in bytes, or `undefined` if no limit is set.
      */
     getMemoryMax(): number | undefined {
-        try {
-            return this.getLua().global.getMemoryMax();
-        } catch (error) {
-            throw toBridgeError('Failed to get memory max', error);
-        }
+        this.getLua();
+        return this.executionService.getMemoryMax();
     }
 
     /**
@@ -720,11 +874,8 @@ class LuaBridge<
      * @param max Maximum memory in bytes, or `undefined` to remove the limit.
      */
     setMemoryMax(max: number | undefined): void {
-        try {
-            this.getLua().global.setMemoryMax(max);
-        } catch (error) {
-            throw toBridgeError('Failed to set memory max', error);
-        }
+        this.getLua();
+        this.executionService.setMemoryMax(max);
     }
 
     /**
@@ -733,11 +884,8 @@ class LuaBridge<
      * @param log Optional logger function (defaults to `console.log`).
      */
     dumpStack(log?: (...data: unknown[]) => void): void {
-        try {
-            this.getLua().global.dumpStack(log);
-        } catch (error) {
-            throw toBridgeError('Failed to dump stack', error);
-        }
+        this.getLua();
+        this.executionService.dumpStack(log);
     }
 
     /**
@@ -757,21 +905,10 @@ class LuaBridge<
      * ```
      */
     async call<T = unknown>(name: string, ...args: unknown[]): Promise<T> {
-        const lua = this.getLua();
-        return await this.withExecutionLock(async () => {
-            try {
-                if (typeof name !== 'string' || name.length === 0) {
-                    throw new Error('Function name must be a non-empty string');
-                }
-                const result = lua.global.call(name, ...args);
-                if (result && result.length > 0) {
-                    return (result.length === 1 ? result[0] : result) as T;
-                }
-                return undefined as unknown as T;
-            } catch (error) {
-                throw toBridgeError(`Failed to call '${name}'`, error);
-            }
-        });
+        this.getLua();
+        return await this.withExecutionLock(
+            () => this.executionService.call(name, ...args),
+        );
     }
 
     /**
@@ -781,81 +918,44 @@ class LuaBridge<
      * @param code Lua module body code.
      */
     async loadModule(name: string, code: string): Promise<void> {
-        const lua = this.getLua();
-        return await this.withExecutionLock(async () => {
-            try {
-                if (typeof name !== 'string' || name.length === 0) {
-                    throw new Error('Module name must be a non-empty string');
-                }
-                if (typeof code !== 'string') {
-                    throw new Error('Module code must be a string');
-                }
-
-                const moduleNameKey = `__lua_bridge_module_name_${this.nextArgsKey()}`;
-                lua.global.set(moduleNameKey, name);
-                try {
-                    await lua.doString(`
-                        local __module_name = _G['${moduleNameKey}']
-                        _G['${moduleNameKey}'] = nil
-                        package.loaded[__module_name] = (function(...) ${code} end)()
-                    `);
-                } finally {
-                    lua.global.set(moduleNameKey, undefined);
-                }
-            } catch (error) {
-                throw toBridgeError('Failed to load module', error);
-            }
-        });
+        this.getLua();
+        await this.executionService.loadModule(name, code);
     }
 
     /** Execute Lua source string in the current runtime. */
     async execute<T = unknown>(code: string, ...args: unknown[]): Promise<T> {
         this.getLua();
-        return await this.withExecutionLock(async () => {
-            return await this.executeInCurrentLock<T>(code, ...args);
-        });
+        return await this.withExecutionLock(
+            () => this.executionService.executeInCurrentLock<T>(code, ...args),
+        );
     }
 
     /** Execute a mounted Lua file in the current runtime. */
     async executeFile<T = unknown>(file: string, ...args: unknown[]): Promise<T> {
-        const lua = this.getLua();
-        return await this.withExecutionLock(async () => {
-            try {
-                return await this.withScopedCompatArgs(args, async () => {
-                    const wrapped = wrapForMultiReturn(`return dofile(${toLuaLongString(file)})`);
-                    const raw = await lua.doString<Record<string, unknown>>(wrapped);
-                    return unwrapTablePack(raw) as unknown as T;
-                });
-            } catch (error) {
-                throw toBridgeError('Failed to execute file', error);
-            }
-        });
+        this.getLua();
+        return await this.executionService.executeFile(file, ...args);
     }
 
     /**
-     * Execute Lua source synchronously. Useful in contexts where async is inconvenient.
+     * Execute Lua source synchronously, bypassing the execution lock.
      *
-     * Note: This bypasses the execution lock. Use with care in single-threaded contexts.
+     * ⚠️ Use only when async execution is not possible. Can cause race conditions
+     * if async operations are in flight.
      */
-    executeSync<T = unknown>(code: string): T {
-        try {
-            return this.getLua().doStringSync<T>(code);
-        } catch (error) {
-            throw toBridgeError('Failed to execute sync', error);
-        }
+    executeRaw<T = unknown>(code: string): T {
+        this.getLua();
+        return this.executionService.executeRaw(code);
     }
 
     /**
-     * Execute a mounted Lua file synchronously.
+     * Execute a mounted Lua file synchronously, bypassing the execution lock.
      *
-     * Note: This bypasses the execution lock. Use with care in single-threaded contexts.
+     * ⚠️ Use only when async execution is not possible. Can cause race conditions
+     * if async operations are in flight.
      */
-    executeFileSync<T = unknown>(file: string): T {
-        try {
-            return this.getLua().doFileSync<T>(file);
-        } catch (error) {
-            throw toBridgeError('Failed to execute file sync', error);
-        }
+    executeFileRaw<T = unknown>(file: string): T {
+        this.getLua();
+        return this.executionService.executeFileRaw(file);
     }
 
     /**
@@ -871,141 +971,8 @@ class LuaBridge<
         env: TEnv,
         options?: { files?: Record<string, string> },
     ): Promise<LuaExecutionContext<TEnv>> {
-        const lua = this.getLua();
-        try {
-            if (!isObject(env)) {
-                throw new Error('Environment must be an object');
-            }
-
-            // Mount environment-scoped files
-            if (options?.files) {
-                for (const [path, content] of Object.entries(options.files)) {
-                    await this.factory.mountFile(path, content);
-                    this.mountedFiles.add(path);
-                }
-            }
-
-            const withEnvironment = async <T>(callback: () => Promise<T>): Promise<T> => {
-                return await this.withExecutionLock(async () => {
-                    lua.global.set(ENV_GLOBAL_NAME, env);
-                    try {
-                        return await callback();
-                    } finally {
-                        lua.global.set(ENV_GLOBAL_NAME, undefined);
-                    }
-                });
-            };
-
-            const scopeCodePrefix = `
-local __bridge_env = ${ENV_GLOBAL_NAME}
-local __scope = setmetatable({}, {
-    __index = function(_, key)
-        local value = __bridge_env[key]
-        if value ~= nil then
-            return value
-        end
-        return _G[key]
-    end,
-    __newindex = function(_, key, value)
-        __bridge_env[key] = value
-    end,
-})
-`;
-
-            return {
-                environment: env,
-
-                execute: async <T = unknown>(code: string, ...args: unknown[]): Promise<T> => {
-                    const wrappedCode = `${scopeCodePrefix}
-local __chunk = assert(load(${toLuaLongString(code)}, nil, 't', __scope))
-return __chunk(...)
-`;
-                    return await withEnvironment(() => this.executeInCurrentLock<T>(wrappedCode, ...args));
-                },
-
-                executeFile: async <T = unknown>(file: string, ...args: unknown[]): Promise<T> => {
-                    const wrappedCode = `${scopeCodePrefix}
-local __chunk = assert(loadfile(${toLuaLongString(file)}, 't', __scope))
-return __chunk(...)
-`;
-                    return await withEnvironment(() => this.executeInCurrentLock<T>(wrappedCode, ...args));
-                },
-
-                mountFile: async (path: string, content: string): Promise<void> => {
-                    this.assertInitialized();
-                    await this.factory.mountFile(path, content);
-                    this.mountedFiles.add(path);
-                },
-
-                // ── Environment introspection & manipulation ──
-
-                get: <T = unknown>(key: string): T => (env as Record<string, unknown>)[key] as T,
-                set: (key: string, value: unknown): void => { (env as Record<string, unknown>)[key] = value; },
-                has: (key: string): boolean => key in env,
-                delete: (key: string): boolean => {
-                    const existed = key in env;
-                    delete (env as Record<string, unknown>)[key];
-                    return existed;
-                },
-                keys: (): string[] => Object.keys(env),
-                assign: (pairs: Record<string, unknown>): void => {
-                    Object.assign(env, pairs);
-                },
-                clear: (): void => {
-                    for (const key of Object.keys(env)) {
-                        delete (env as Record<string, unknown>)[key];
-                    }
-                },
-
-                // ── Convenience execution helpers ──
-
-                eval: async <T = unknown>(expression: string): Promise<T> => {
-                    // Reuses execute() which provides scope prefix, withEnvironment, and multi-return handling
-                    return await this.execute<T>(`return (${expression})`);
-                },
-
-                call: async <T = unknown>(name: string, ...args: unknown[]): Promise<T> => {
-                    // Reuses execute() — name is a Lua identifier or dotted path
-                    // resolved through the scope's __index (env vars → _G)
-                    return await this.execute<T>(
-                        `local __fn = ${name}
-if type(__fn) ~= "function" then
-    error("attempt to call a non-function value ('" .. "${name}" .. "')", 0)
-end
-return __fn(...)`,
-                        ...args,
-                    );
-                },
-            };
-        } catch (error) {
-            throw toBridgeError('Failed to use environment', error);
-        }
-    }
-
-    /** Execute code while already holding the execution lock. */
-    private async executeInCurrentLock<T = unknown>(code: string, ...args: unknown[]): Promise<T> {
-        try {
-            const lua = this.getLua();
-            let finalCode: string;
-
-            if (args.length > 0) {
-                const argsGlobalName = this.nextArgsKey();
-                lua.global.set(argsGlobalName, args);
-                try {
-                    finalCode = luaWrap(code, argsGlobalName);
-                    const raw = await lua.doString<Record<string, unknown>>(finalCode);
-                    return unwrapTablePack(raw) as unknown as T;
-                } finally {
-                    lua.global.set(argsGlobalName, undefined);
-                }
-            }
-
-            finalCode = wrapForMultiReturn(code);
-            const raw = await lua.doString<Record<string, unknown>>(finalCode);
-            return unwrapTablePack(raw) as unknown as T;
-        } catch (error) {
-            throw toBridgeError('Failed to execute code', error);
-        }
+        this.getLua();
+        return await this.environmentService.useEnvironment(env, options);
     }
 
     /**
@@ -1016,10 +983,9 @@ return __fn(...)`,
     async mountFile(file: string, content: string): Promise<void> {
         this.assertInitialized();
         try {
-            await this.factory.mountFile(file, content);
-            this.mountedFiles.add(file);
+            await this.vfs.mount(file, content);
         } catch (error) {
-            throw toBridgeError('Failed to mount file', error);
+            throw toBridgeError('Failed to mount file', error, ErrorCodes.FILE);
         }
     }
 }
@@ -1029,7 +995,7 @@ export default LuaBridge;
 /**
  * Create and initialize a new `LuaBridge`.
  *
- * @typeParam TGlobals Known global map used for typed `setGlobal/getGlobal` keys.
+ * @typeParam TGlobals Known global map used for typed `Get`/`Set` keys.
  * @typeParam TEvents Event payload map used for typed `on/off/emit`.
  */
 export async function createLuaBridge<
@@ -1061,5 +1027,3 @@ export async function runLuaCode<T = unknown>(code: string, ...args: unknown[]):
     }
 }
 
-export { LuaClass } from './lua_class.ts';
-export { LuaBindings } from './bindings.ts';

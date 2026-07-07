@@ -104,9 +104,9 @@ export interface LuaExecutionContext<TEnv extends Record<string, unknown> = Reco
     // ── Environment introspection & manipulation ──
 
     /** Get a value from the environment. */
-    get<T = unknown>(key: string): T;
+    Get<T = unknown>(key: string): T;
     /** Set a value in the environment. */
-    set(key: string, value: unknown): void;
+    Set(key: string, value: unknown): void;
     /** Check if a key exists in the environment. */
     has(key: string): boolean;
     /** Remove a key from the environment. Returns true if the key existed. */
@@ -155,11 +155,13 @@ export interface LuaBridgeEventApi<TEvents extends LuaBridgeEventMap = LuaBridge
     /** Register listener for a strongly typed event key. */
     on<K extends keyof TEvents & string>(event: K, handler: EventHandler<TEvents[K]>): () => boolean;
     /** Register listener for dynamic/untyped event keys. */
-    on(event: string, handler: EventHandler): () => boolean;
+    // deno-lint-ignore no-explicit-any
+    on(event: string, handler: EventHandler<any[]>): () => boolean;
     /** Unregister listener for a strongly typed event key. */
     off<K extends keyof TEvents & string>(event: K, handler: EventHandler<TEvents[K]>): boolean;
     /** Unregister listener for dynamic/untyped event keys. */
-    off(event: string, handler: EventHandler): boolean;
+    // deno-lint-ignore no-explicit-any
+    off(event: string, handler: EventHandler<any[]>): boolean;
     /** Emit a strongly typed event payload. */
     emit<K extends keyof TEvents & string>(event: K, ...args: TEvents[K]): number;
     /** Emit a dynamic/untyped event payload. */

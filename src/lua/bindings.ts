@@ -75,8 +75,12 @@ export interface LuaBindingOptions {
  * class MyBindings extends LuaBindings { ... }
  * ```
  */
-export function LuaBinder(options: LuaBinderOptions) {
-    return function (constructor: new (...args: unknown[]) => unknown): void {
+// reason: decorator constructor signature uses any intentionally
+// deno-lint-ignore no-explicit-any
+export function LuaBinder(options: LuaBinderOptions): <T extends new (...args: any[]) => any>(constructor: T) => void {
+    // reason: decorator constructor signature uses any intentionally
+    // deno-lint-ignore no-explicit-any
+    return function <T extends new (...args: any[]) => any>(constructor: T): void {
         (constructor as unknown as Record<symbol, LuaBinderOptions>)[BINDER_OPTIONS] = options;
     };
 }
@@ -90,7 +94,7 @@ export function LuaBinder(options: LuaBinderOptions) {
  * static greet(name: string): string { return `Hello ${name}`; }
  * ```
  */
-export function LuaBinding(options: LuaBindingOptions = {}) {
+export function LuaBinding(options: LuaBindingOptions = {}): (target: unknown, propertyKey: string, descriptor: PropertyDescriptor) => void {
     return function (
         target: unknown,
         propertyKey: string,
@@ -139,6 +143,15 @@ export function LuaBinding(options: LuaBindingOptions = {}) {
  */
 export class LuaBindings {
     constructor(public readonly ctx: BindingContext) {}
+
+    /**
+     * Called when the bridge is closing.
+     * Override to release resources (e.g. cancel timers, close connections).
+     * Default is a no-op.
+     */
+    close(): void {
+        // subclass can override
+    }
 
     /**
      * Install all decorated bindings into the Lua environment.

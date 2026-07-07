@@ -1,29 +1,51 @@
+---
+title: Getting Started
+description: Install, create your first bridge, and run Lua code from TypeScript
+sidebar_position: 1
+---
+
 # Getting Started
-
-## What is WebLuaBridge?
-
-WebLuaBridge lets you embed a Lua runtime inside your TypeScript/JavaScript application. You can execute Lua scripts, call Lua functions from JS, expose JS APIs to Lua, and build plugin/modding systems — all without a native Lua installation. It runs Lua in WebAssembly via [wasmoon](https://github.com/ceifa/wasmoon).
 
 ## Installation
 
-Import directly from GitHub (Deno):
+### Deno
+
+Import directly — no install step needed:
 
 ```ts
-import { createLuaBridge } from "https://raw.githubusercontent.com/Therosin/WebLuaBridge/develop/mod.ts";
+import { createLuaBridge, runLuaCode } from "./mod.ts";
 ```
 
-For production, pin a specific commit or tag:
+For published projects, pin a version:
 
 ```ts
 import { createLuaBridge } from "https://raw.githubusercontent.com/Therosin/WebLuaBridge/v0.1.0/mod.ts";
 ```
 
+### Browser
+
+Use the pre-built ESM bundle:
+
+```html
+<script type="module">
+  import { createLuaBridge } from "./dist/webluabridge.bundle.min.js";
+  // ...
+</script>
+```
+
+See the [browser guide](./guides/browser.md) for full details.
+
+---
+
 ## Your first bridge
+
+Create a bridge, run Lua, and clean up:
 
 ```ts
 import { createLuaBridge } from "./mod.ts";
 
 const bridge = await createLuaBridge();
+
 try {
   const result = await bridge.execute("return 40 + 2");
   console.log(result); // 42
@@ -32,32 +54,102 @@ try {
 }
 ```
 
-`createLuaBridge()` initializes a Lua runtime and returns a bridge instance. Always call `bridge.close()` when you're done to free resources.
+`createLuaBridge()` initializes the Lua runtime and returns a bridge instance. Always call `bridge.close()` when you're done.
+
+---
+
+## Passing data to Lua
+
+Inject globals when creating the bridge:
+
+```ts
+const bridge = await createLuaBridge({
+  playerName: "Ada",
+  score: 100,
+  config: { theme: "dark" },
+});
+
+const result = await bridge.execute(`
+  return "Player: " .. playerName .. ", score: " .. score
+`);
+console.log(result); // "Player: Ada, score: 100"
+```
+
+These values are available in Lua's global `_G` table.
+
+---
+
+## Calling Lua functions from JS
+
+Define a function in Lua, then call it from TypeScript:
+
+```ts
+await bridge.execute(`
+  function greet(name)
+    return "Hello, " .. name .. "!"
+  end
+`);
+
+const message = await bridge.call<string>("greet", "World");
+console.log(message); // "Hello, World!"
+```
+
+`call()` is more efficient than string-wrapping — it invokes the Lua function directly.
+
+---
 
 ## One-shot execution
 
-If you only need to run Lua once and don't need the bridge afterwards, use `runLuaCode()`:
+When you only need to run Lua once and don't need the bridge afterwards:
 
 ```ts
-import { runLuaCode } from "./mod.ts";
-
-const result = await runLuaCode("return 'hello from Lua'");
-console.log(result); // "hello from Lua"
+const result = await runLuaCode("return 1 + 2 + 3");
+console.log(result); // 6
 ```
 
-`runLuaCode()` creates a temporary bridge, executes your code, and cleans up automatically.
+`runLuaCode()` creates a temporary bridge, runs your code, and closes the runtime automatically.
 
-## Passing globals
-
-You can inject values into Lua's global scope:
+You can also pass arguments:
 
 ```ts
-const bridge = await createLuaBridge({ appName: "MyApp", version: 2 });
-// Lua can now access:  _G.appName  and  _G.version
+const result = await runLuaCode("return ... + 10", 32);
+console.log(result); // 42
 ```
 
-## Next steps
+---
 
-- [Execution](./execution.md) — all the ways to run Lua code
-- [Events](./events.md) — JS↔Lua communication
-- [Bindings](./bindings.md) — exposing JS APIs to Lua with decorators
+## Multi-return values
+
+When Lua returns multiple values, they come back as an array:
+
+```ts
+const result = await bridge.execute("return 1, 2, 3");
+console.log(result); // [1, 2, 3]
+```
+
+A single return value comes back directly (not wrapped). No return gives `undefined`.
+
+---
+
+## Error handling
+
+Wrap execution in try/catch:
+
+```ts
+try {
+  await bridge.execute("error('something went wrong')");
+} catch (err) {
+  console.error(err.message);
+  // "Failed to execute code: something went wrong"
+}
+```
+
+The bridge survives errors — you can keep using it after a failed call.
+
+---
+
+## What's next
+
+- [Running Lua code](./guides/running-lua.md) — execute, call, files, modules, sync
+- [Sharing data](./guides/sharing-data.md) — globals, deep paths, type safety
+- [Event system](./guides/event-system.md) — JS ↔ Lua communication

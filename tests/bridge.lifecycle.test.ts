@@ -1,4 +1,4 @@
-import { assert, assertEquals } from 'jsr:@std/assert';
+import { assert, assertEquals } from '@std/assert';
 import { createLuaBridge } from '../mod.ts';
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
