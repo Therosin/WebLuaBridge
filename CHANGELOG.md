@@ -17,12 +17,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GetMethod()` self-binding method handles for Lua `obj:method()` calling convention
 - `SetFunction()` / `SetMethod()` convenience wrappers for exposing JS functions to Lua
 - `ctx.Get()` / `ctx.Set()` renamed from `ctx.get()` / `ctx.set()`
+- Shipped bindings are now exported from `mod.ts`: `globalBindings`, `jsonBindings`, `regexBindings`, `timersBindings`, and their `*Bindings` classes
+- `js_null()` global helper; `js_type()` now distinguishes arrays, `Map`s, and `Set`s
+- TC39 stage-3 decorator support for `@LuaBinding` (in addition to legacy `experimentalDecorators`)
 
 ### Changed
 
+- `regex` binding operations now take the subject string first: `regex.match(str, pattern)`, `regex.replace(str, pattern, replacement)` — matching Lua's `string.find(str, pattern)` and JavaScript's `str.match(pattern)`
+- `json`, `regex`, and `timers` namespaces install as read-only
+- `LuaClass.readonly()` now rejects overwriting or removing existing keys, not just adding new ones
+- Source imports use `npm:wasmoon@1.16.0` directly so consumer bundlers (esbuild) no longer need a `wasmoon` import-map entry
 - TypeScript strict mode enabled (`strict: true`, `noImplicitAny: true`)
 - Build pipeline migrated from deprecated `deno bundle` to esbuild
 - `null` from wasmoon normalized to `undefined` in `Get()` for consistency
+
+### Fixed
+
+- `@LuaBinder` classes that collect zero `@LuaBinding` methods now throw at install time instead of silently registering nothing
+- Configuring `readonly` without a `namespace` now throws instead of being a silent no-op
 
 ### Deprecated
 

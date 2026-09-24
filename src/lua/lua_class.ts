@@ -28,29 +28,41 @@ const HELPER_NAME = '__lua_class_helper';
 function buildHelperCode(): string {
     return `
     ${HELPER_NAME} = function(config)
-        local t = {}
+        local data = {}
         for k, v in pairs(config.values or {}) do
-            t[k] = v
+            data[k] = v
         end
+
         local mt = {}
         mt.__metatable = false
-        if config.callable and t.__call then
-            mt.__call = function(self, ...)
-                return t.__call(...)
+
+        -- Read-only tables expose an empty proxy table backed by 'data'.
+        -- Because the visible table has no keys, every write (including
+        -- assigning nil to an existing key) is an absent-key assignment and
+        -- therefore always triggers __newindex.
+        local target = config.readonly and {} or data
+
+        if config.callable and data.__call then
+            mt.__call = function(_, ...)
+                return data.__call(...)
             end
         end
-        if config.index then
-            mt.__index = config.index
-        end
-        if config.newindex then
-            mt.__newindex = config.newindex
-        end
+
         if config.readonly then
+            mt.__index = data
             mt.__newindex = function(_, k)
                 error("Cannot modify read-only table '" .. tostring(config.name) .. "'", 2)
             end
+        else
+            if config.index then
+                mt.__index = config.index
+            end
+            if config.newindex then
+                mt.__newindex = config.newindex
+            end
         end
-        return setmetatable(t, mt)
+
+        return setmetatable(target, mt)
     end
 `;
 }

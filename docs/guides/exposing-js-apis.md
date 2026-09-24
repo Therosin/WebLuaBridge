@@ -134,6 +134,8 @@ cls.installSync(luaEngine, "Utils");     // sync
 
 For larger APIs, use `@LuaBinder` and `@LuaBinding` decorators to define modules as TypeScript classes.
 
+`@LuaBinding` works with both decorator conventions — legacy TypeScript decorators (`experimentalDecorators: true`) and TC39 stage-3 decorators (TypeScript's default for modern targets, and what bundlers such as esbuild emit by default). A class decorated with `@LuaBinder` that collects zero `@LuaBinding` methods throws at install time instead of silently registering nothing.
+
 ### Defining a binding module
 
 ```ts
@@ -194,6 +196,8 @@ print(js_type(42))      -- "number"
 print(js_type("hello")) -- "string"
 ```
 
+> `readonly` is **not** supported for namespace-less bindings: Lua has no way to intercept assignment to an existing `_G` key. Configuring `readonly` without a `namespace` throws at install time. To protect an API, give it a namespace.
+
 ### Read-only namespaces
 
 ```ts
@@ -206,7 +210,8 @@ class ConfigBindings extends LuaBindings {
 }
 ```
 
-Lua cannot add or modify keys in a read-only namespace.
+Lua cannot add, overwrite, or remove keys in a read-only namespace:
+`config.get = nil` fails just like `config.newKey = 1`. Read-only namespaces are exposed through an empty proxy table backed by a hidden store, so every write is rejected.
 
 ### Callable namespaces
 
@@ -312,16 +317,30 @@ class AnalyticsBindings extends LuaBindings {
 
 ## Built-in bindings
 
-The project ships example binding modules you can register:
+The project ships binding modules you can register. Import the factories from the package root:
 
-| Module | Namespace | Functions |
+```ts
+import {
+  createLuaBridge,
+  globalBindings,
+  jsonBindings,
+  regexBindings,
+  timersBindings,
+} from "./mod.ts";
+
+const bridge = await createLuaBridge({}, {
+  bindings: [globalBindings, jsonBindings, regexBindings, timersBindings],
+});
+```
+
+| Export | Namespace | Functions |
 |---|---|---|
-| `src/bindings/global.ts` | `_G` | `js_type()`, `js_len()`, `js_true()` |
-| `src/bindings/json.ts` | `json` | `stringify()`, `parse()`, `encode()`, `decode()` |
-| `src/bindings/regex.ts` | `regex` | `match()`, `test()`, `replace()`, `replaceAll()`, `split()` |
-| `src/bindings/timers.ts` | `timers` | `setTimeout()`, `setInterval()`, `clearTimeout()`, `clearInterval()`, `clearAll()`, `activeCount()` |
+| `globalBindings` | `_G` | `js_type()`, `js_len()`, `js_true()`, `js_null()` |
+| `jsonBindings` | `json` (read-only) | `stringify()`, `parse()`, `encode()`, `decode()` |
+| `regexBindings` | `regex` (read-only) | `match()`, `test()`, `replace()`, `replaceAll()`, `split()` |
+| `timersBindings` | `timers` (read-only) | `setTimeout()`, `setInterval()`, `clearTimeout()`, `clearInterval()`, `clearAll()`, `activeCount()` |
 
-Import and register them like any other binding factory.
+Global (`_G`) bindings cannot be read-only — see [Global-scope bindings](#global-scope-bindings-no-namespace).
 
 ---
 

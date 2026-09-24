@@ -231,4 +231,4 @@ export class TimerBindings extends LuaBindings {
     }
 }
 
-export default (ctx: BindingContext) => new TimerBindings(ctx);
+export default (ctx: BindingContext): TimerBindings => new TimerBindings(ctx);

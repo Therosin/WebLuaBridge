@@ -6,24 +6,31 @@ sidebar_position: 5
 
 # Built-in Bindings
 
-WebLuaBridge ships with example binding modules you can register to give Lua access to JavaScript APIs. These live in `src/bindings/`.
+WebLuaBridge ships with ready-made binding modules you can register to give Lua access to JavaScript APIs. The factories (and their classes) are exported from the package root, so no deep imports or extra import-map entries are required.
 
 ---
 
 ## Registering
 
-Import and register them like any other binding factory:
+Import the shipped factories from `mod.ts` and register them like any other binding factory:
 
 ```ts
-import globalBindings from "./src/bindings/global.ts";
-import jsonBindings from "./src/bindings/json.ts";
-import regexBindings from "./src/bindings/regex.ts";
-import timersBindings from "./src/bindings/timers.ts";
+import {
+  createLuaBridge,
+  globalBindings,
+  jsonBindings,
+  regexBindings,
+  timersBindings,
+} from "./mod.ts";
 
 const bridge = await createLuaBridge({}, {
   bindings: [globalBindings, jsonBindings, regexBindings, timersBindings],
 });
 ```
+
+The underlying classes (`GlobalBindings`, `JsonBindings`, `RegexBindings`, `TimerBindings`) are exported as well if you need to subclass or reference them.
+
+`json`, `regex`, and `timers` install their namespaces as **read-only**, so authored Lua cannot overwrite or remove their functions. `globalBindings` is the exception: Lua cannot intercept assignment to an existing `_G` key, so global functions cannot be protected — put immutability-critical APIs behind a namespace instead.
 
 ---
 
@@ -33,12 +40,14 @@ const bridge = await createLuaBridge({}, {
 
 ### js_type(value)
 
-Returns the JavaScript `typeof` a value as a string.
+Returns the JavaScript type of a value as a string. Arrays, `Map`s, and `Set`s are distinguished from plain objects.
 
 ```lua
-print(js_type(42))      -- "number"
-print(js_type("hello")) -- "string"
-print(js_type({}))     -- "table" (Lua tables report as "table")
+print(js_type(42))         -- "number"
+print(js_type("hello"))    -- "string"
+print(js_type(true))       -- "boolean"
+print(js_type({1, 2, 3}))  -- "array"  (indexed Lua tables convert to JS arrays)
+print(js_type({}))         -- "object" (string-keyed tables convert to JS objects)
 ```
 
 ### js_len(value)
@@ -56,6 +65,15 @@ Returns the JavaScript `true` value (distinct from Lua's `true`).
 
 ```lua
 local t = js_true()
+```
+
+### js_null(value)
+
+Returns `true` only when the value is JavaScript `null` (for example, a Lua `nil` that crossed back into JavaScript).
+
+```lua
+print(js_null(nil))   -- true
+print(js_null(0))     -- false
 ```
 
 ---

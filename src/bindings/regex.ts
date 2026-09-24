@@ -24,27 +24,30 @@
  *
  * Usage:
  * ```lua
- * regex.test("^hello", "hello world")        --> true
- * regex.match("(\\w+)@(\\w+)", "a@b")         --> {"a@b", "a", "b"}
- * regex.replace("world", "hello world", "JS") --> "hello JS"
- * regex.replaceAll("o", "hello world", "x")    --> "hellx wxrld"
- * regex.split(", ", "a, b, c")                --> {"a", "b", "c"}
+ * regex.test("hello world", "^hello")         --> true
+ * regex.match("a@b", "(\\w+)@(\\w+)")         --> {"a@b", "a", "b"}
+ * regex.replace("hello world", "world", "JS") --> "hello JS"
+ * regex.replaceAll("hello world", "o", "x")    --> "hellx wxrld"
+ * regex.split("a, b, c", ", ")                --> {"a", "b", "c"}
  * ```
+ *
+ * Strings come first and the pattern second, matching Lua's
+ * `string.find(str, pattern)` and JavaScript's `str.match(pattern)`.
  */
 
 import { LuaBindings, LuaBinder, LuaBinding } from '../lua/bindings.ts';
 import type { BindingContext } from '../lua/types.ts';
 
-@LuaBinder({ namespace: 'regex' })
+@LuaBinder({ namespace: 'regex', readonly: true })
 export class RegexBindings extends LuaBindings {
     /**
      * Return the first match with captures, or nil if no match.
      * ```lua
-     * regex.match("(\\w+)@(\\w+)", "a@b")  --> {"a@b", "a", "b"}
+     * regex.match("a@b", "(\\w+)@(\\w+)")  --> {"a@b", "a", "b"}
      * ```
      */
     @LuaBinding({ name: 'match' })
-    static match(pattern: string, str: string): string[] | null {
+    static match(str: string, pattern: string): string[] | null {
         const re = new RegExp(pattern);
         const result = re.exec(str);
         if (!result) return null;
@@ -54,46 +57,46 @@ export class RegexBindings extends LuaBindings {
     /**
      * Return true if the pattern matches anywhere in the string.
      * ```lua
-     * regex.test("^hello", "hello world")  --> true
+     * regex.test("hello world", "^hello")  --> true
      * ```
      */
     @LuaBinding({ name: 'test' })
-    static test(pattern: string, str: string): boolean {
+    static test(str: string, pattern: string): boolean {
         return new RegExp(pattern).test(str);
     }
 
     /**
      * Replace the first occurrence of pattern with replacement.
      * ```lua
-     * regex.replace("world", "hello world", "JS")  --> "hello JS"
+     * regex.replace("hello world", "world", "JS")  --> "hello JS"
      * ```
      */
     @LuaBinding({ name: 'replace' })
-    static replace(pattern: string, str: string, replacement: string): string {
+    static replace(str: string, pattern: string, replacement: string): string {
         return str.replace(new RegExp(pattern), replacement);
     }
 
     /**
      * Replace all occurrences of pattern (global flag added automatically).
      * ```lua
-     * regex.replaceAll("o", "hello world", "x")  --> "hellx wxrld"
+     * regex.replaceAll("hello world", "o", "x")  --> "hellx wxrld"
      * ```
      */
     @LuaBinding({ name: 'replaceAll' })
-    static replaceAll(pattern: string, str: string, replacement: string): string {
+    static replaceAll(str: string, pattern: string, replacement: string): string {
         return str.replace(new RegExp(pattern, 'g'), replacement);
     }
 
     /**
      * Split a string by pattern.
      * ```lua
-     * regex.split(", ", "a, b, c")  --> {"a", "b", "c"}
+     * regex.split("a, b, c", ", ")  --> {"a", "b", "c"}
      * ```
      */
     @LuaBinding({ name: 'split' })
-    static split(pattern: string, str: string): string[] {
+    static split(str: string, pattern: string): string[] {
         return str.split(new RegExp(pattern));
     }
 }
 
-export default (ctx: BindingContext) => new RegexBindings(ctx);
+export default (ctx: BindingContext): RegexBindings => new RegexBindings(ctx);

@@ -52,7 +52,7 @@ Passed to the `@LuaBinder` decorator.
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `namespace` | `string` | — | Lua namespace table (omit to put methods in `_G`) |
-| `readonly` | `boolean` | `false` | Reject writes to the namespace table |
+| `readonly` | `boolean` | `false` | Reject writes to the namespace table (requires `namespace`; throws if set without one) |
 | `callable` | `boolean` | `false` | Make the namespace callable via `__call` |
 | `hooks` | `{ before?, after? }` | — | Lifecycle hooks called before/after every binding method |
 

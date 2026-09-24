@@ -36,7 +36,7 @@
 import { LuaBindings, LuaBinder, LuaBinding } from '../lua/bindings.ts';
 import type { BindingContext } from '../lua/types.ts';
 
-@LuaBinder({ namespace: 'json' })
+@LuaBinder({ namespace: 'json', readonly: true })
 export class JsonBindings extends LuaBindings {
     /**
      * Serialize a value to a JSON string.
@@ -86,4 +86,4 @@ export class JsonBindings extends LuaBindings {
     }
 }
 
-export default (ctx: BindingContext) => new JsonBindings(ctx);
+export default (ctx: BindingContext): JsonBindings => new JsonBindings(ctx);

@@ -523,7 +523,7 @@ function LuaBinding(options: LuaBindingOptions): MethodDecorator;
 ```ts
 {
   namespace?: string;    // Lua namespace (omit for _G)
-  readonly?: boolean;    // Reject writes to namespace table
+  readonly?: boolean;    // Reject writes to namespace table (requires namespace)
   callable?: boolean;    // Make namespace callable
   hooks?: {
     before?: (methodName: string, args: unknown[]) => void;

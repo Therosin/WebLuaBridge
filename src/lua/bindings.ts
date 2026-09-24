@@ -34,7 +34,7 @@ const BINDING_METHODS = Symbol('LuaBinder:methods');
 export interface LuaBinderOptions {
     /** If set, bindings are placed under `_G[namespace]`. If undefined, they go to `_G` directly. */
     namespace?: string;
-    /** If true, the namespace table rejects writes with an error. */
+    /** If true, the namespace table rejects writes with an error. Requires `namespace`. */
     readonly?: boolean;
     /**
      * Lifecycle hooks called before/after each binding invocation.
@@ -88,24 +88,68 @@ export function LuaBinder(options: LuaBinderOptions): <T extends new (...args: a
 /**
  * Method decorator that marks a static method as a Lua-callable binding.
  *
+ * Supports both decorator conventions:
+ * - Legacy TypeScript decorators (`experimentalDecorators: true`)
+ * - TC39 stage-3 decorators (TypeScript's default for modern targets and the
+ *   convention used by esbuild and other bundlers)
+ *
  * @example
  * ```ts
  * @LuaBinding({ name: 'greet' })
  * static greet(name: string): string { return `Hello ${name}`; }
  * ```
  */
-export function LuaBinding(options: LuaBindingOptions = {}): (target: unknown, propertyKey: string, descriptor: PropertyDescriptor) => void {
+export function LuaBinding(
+    options: LuaBindingOptions = {},
+): (target: unknown, propertyKeyOrContext: unknown, descriptor?: PropertyDescriptor) => void {
     return function (
         target: unknown,
-        propertyKey: string,
-        _descriptor: PropertyDescriptor,
+        propertyKeyOrContext: unknown,
+        _descriptor?: PropertyDescriptor,
     ): void {
-        // For static methods, `target` is the constructor function
-        const target_ = target as Record<symbol, Array<LuaBindingOptions & { key: string }>>;
-        const existing = target_[BINDING_METHODS] || [];
-        existing.push({ ...options, key: propertyKey });
-        target_[BINDING_METHODS] = existing;
+        // Legacy decorators: (constructor, propertyKey, descriptor)
+        if (typeof propertyKeyOrContext === 'string' || typeof propertyKeyOrContext === 'symbol') {
+            registerBinding(target, options, String(propertyKeyOrContext));
+            return;
+        }
+
+        // TC39 stage-3 decorators: (value, context: ClassMethodDecoratorContext).
+        // The class is not available here, so we defer registration to an
+        // initializer, which runs with `this` bound to the class.
+        const context = propertyKeyOrContext as {
+            kind?: string;
+            name?: string | symbol;
+            static?: boolean;
+            addInitializer?: (initializer: (this: unknown) => void) => void;
+        } | null;
+
+        if (!context || context.kind !== 'method') {
+            throw new TypeError('@LuaBinding can only be applied to methods');
+        }
+        if (context.static !== true) {
+            throw new TypeError('@LuaBinding must be applied to a static method');
+        }
+        if (typeof context.addInitializer !== 'function') {
+            throw new TypeError(
+                '@LuaBinding: unsupported decorator environment (context.addInitializer is missing)',
+            );
+        }
+
+        const key = String(context.name);
+        context.addInitializer(function (this: unknown): void {
+            registerBinding(this, options, key);
+        });
     };
+}
+
+type BindingMethodRecord = LuaBindingOptions & { key: string };
+
+/** Attach a method binding record to a class constructor's metadata. */
+function registerBinding(target: unknown, options: LuaBindingOptions, key: string): void {
+    const record = target as Record<symbol, BindingMethodRecord[]>;
+    const existing = record[BINDING_METHODS] || [];
+    existing.push({ ...options, key });
+    record[BINDING_METHODS] = existing;
 }
 
 // ---------------------------------------------------------------------------
@@ -163,10 +207,28 @@ export class LuaBindings {
             [BINDING_METHODS]: Array<LuaBindingOptions & { key: string }>;
         };
 
-        const opts: LuaBinderOptions = ctor[BINDER_OPTIONS] || {};
+        const binderOptions = ctor[BINDER_OPTIONS];
+        const hasBinder = binderOptions !== undefined;
+        const opts: LuaBinderOptions = binderOptions || {};
         const methods = ctor[BINDING_METHODS] || [];
 
-        if (methods.length === 0) return;
+        if (hasBinder && opts.readonly && !opts.namespace) {
+            throw new Error(
+                `@LuaBinder on '${this.constructor.name || 'anonymous class'}' sets 'readonly' without a ` +
+                    `'namespace'. Global (_G) bindings cannot be made read-only; add a namespace or remove 'readonly'.`,
+            );
+        }
+
+        if (methods.length === 0) {
+            if (hasBinder) {
+                throw new Error(
+                    `@LuaBinder on '${this.constructor.name || 'anonymous class'}' collected zero @LuaBinding ` +
+                        `methods. Ensure the methods are static and decorated with @LuaBinding and that decorators ` +
+                        `are enabled (experimentalDecorators or TC39 stage-3).`,
+                );
+            }
+            return;
+        }
 
         const targetName = opts.namespace;
 

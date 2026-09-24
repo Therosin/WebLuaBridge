@@ -17,9 +17,19 @@
  * along with WebLuaBridge.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { assertEquals, assert } from '@std/assert';
-import { createLuaBridge, LuaClass, LuaBindings, LuaBinder, LuaBinding } from '../mod.ts';
-import type { BindingContext } from '../src/lua/types.ts';
+import { assertEquals, assert, assertRejects } from '@std/assert';
+import {
+    createLuaBridge,
+    globalBindings,
+    jsonBindings,
+    LuaBinder,
+    LuaBinding,
+    LuaBindings,
+    LuaClass,
+    regexBindings,
+    timersBindings,
+} from '../mod.ts';
+import type { BindingContext, LuaEngineLike } from '../src/lua/types.ts';
 
 // ---------------------------------------------------------------------------
 // LuaClass — standalone usage
@@ -260,10 +270,10 @@ Deno.test('bindings: readonly namespace rejects writes', async () => {
 // Regex bindings
 // ---------------------------------------------------------------------------
 
-@LuaBinder({ namespace: 'regex' })
+@LuaBinder({ namespace: 'regex', readonly: true })
 class RegexTestBindings extends LuaBindings {
     @LuaBinding({ name: 'match' })
-    static match(pattern: string, str: string): string[] | null {
+    static match(str: string, pattern: string): string[] | null {
         const re = new RegExp(pattern);
         const result = re.exec(str);
         if (!result) return null;
@@ -271,22 +281,22 @@ class RegexTestBindings extends LuaBindings {
     }
 
     @LuaBinding({ name: 'test' })
-    static test(pattern: string, str: string): boolean {
+    static test(str: string, pattern: string): boolean {
         return new RegExp(pattern).test(str);
     }
 
     @LuaBinding({ name: 'replace' })
-    static replace(pattern: string, str: string, replacement: string): string {
+    static replace(str: string, pattern: string, replacement: string): string {
         return str.replace(new RegExp(pattern), replacement);
     }
 
     @LuaBinding({ name: 'replaceAll' })
-    static replaceAll(pattern: string, str: string, replacement: string): string {
+    static replaceAll(str: string, pattern: string, replacement: string): string {
         return str.replace(new RegExp(pattern, 'g'), replacement);
     }
 
     @LuaBinding({ name: 'split' })
-    static split(pattern: string, str: string): string[] {
+    static split(str: string, pattern: string): string[] {
         return str.split(new RegExp(pattern));
     }
 }
@@ -296,7 +306,7 @@ Deno.test('regex: match returns captures', async () => {
         bindings: [(ctx: BindingContext) => new RegexTestBindings(ctx)],
     });
     try {
-        const result = await bridge.execute(`return regex.match("(\\\\w+)@(\\\\w+)", "a@b")`);
+        const result = await bridge.execute(`return regex.match("a@b", "(\\\\w+)@(\\\\w+)")`);
         assertEquals(result, ['a@b', 'a', 'b']);
     } finally {
         bridge.close();
@@ -308,7 +318,7 @@ Deno.test('regex: match returns null when no match', async () => {
         bindings: [(ctx: BindingContext) => new RegexTestBindings(ctx)],
     });
     try {
-        const result = await bridge.execute(`return regex.match("\\\\d+", "hello")`);
+        const result = await bridge.execute(`return regex.match("hello", "\\\\d+")`);
         assertEquals(result, null);
     } finally {
         bridge.close();
@@ -320,9 +330,9 @@ Deno.test('regex: test returns boolean', async () => {
         bindings: [(ctx: BindingContext) => new RegexTestBindings(ctx)],
     });
     try {
-        const t = await bridge.execute(`return regex.test("^hello", "hello world")`);
+        const t = await bridge.execute(`return regex.test("hello world", "^hello")`);
         assertEquals(t, true);
-        const f = await bridge.execute(`return regex.test("^world", "hello world")`);
+        const f = await bridge.execute(`return regex.test("hello world", "^world")`);
         assertEquals(f, false);
     } finally {
         bridge.close();
@@ -334,7 +344,7 @@ Deno.test('regex: replace replaces first occurrence', async () => {
         bindings: [(ctx: BindingContext) => new RegexTestBindings(ctx)],
     });
     try {
-        const result = await bridge.execute(`return regex.replace("world", "hello world world", "JS")`);
+        const result = await bridge.execute(`return regex.replace("hello world world", "world", "JS")`);
         assertEquals(result, 'hello JS world');
     } finally {
         bridge.close();
@@ -346,7 +356,7 @@ Deno.test('regex: replaceAll replaces all occurrences', async () => {
         bindings: [(ctx: BindingContext) => new RegexTestBindings(ctx)],
     });
     try {
-        const result = await bridge.execute(`return regex.replaceAll("o", "hello world", "x")`);
+        const result = await bridge.execute(`return regex.replaceAll("hello world", "o", "x")`);
         assertEquals(result, 'hellx wxrld');
     } finally {
         bridge.close();
@@ -358,7 +368,7 @@ Deno.test('regex: split splits string', async () => {
         bindings: [(ctx: BindingContext) => new RegexTestBindings(ctx)],
     });
     try {
-        const result = await bridge.execute(`return regex.split(", ", "a, b, c")`);
+        const result = await bridge.execute(`return regex.split("a, b, c", ", ")`);
         assertEquals(result, ['a', 'b', 'c']);
     } finally {
         bridge.close();
@@ -634,6 +644,126 @@ Deno.test('timers: clearInterval stops interval', async () => {
         await new Promise<void>((r) => setTimeout(r, 50));
         const count = await bridge.execute('return tick_count');
         assertEquals(count, 0);
+    } finally {
+        bridge.close();
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Shipped bindings — exported from mod.ts
+// ---------------------------------------------------------------------------
+
+Deno.test('bindings: built-ins are exported from mod.ts and install', async () => {
+    const bridge = await createLuaBridge({}, {
+        bindings: [globalBindings, jsonBindings, regexBindings, timersBindings],
+    });
+    try {
+        const parsed = await bridge.execute(`local t = json.parse('[10,20]'); return t[2]`);
+        assertEquals(parsed, 20);
+
+        const matched = await bridge.execute(`return regex.test("hello world", "^hello")`);
+        assertEquals(matched, true);
+
+        assertEquals(await bridge.execute('return js_type(42)'), 'number');
+
+        assertEquals(await bridge.execute('return timers.activeCount()'), 0);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('bindings: readonly namespaces reject overwriting an existing key', async () => {
+    const bridge = await createLuaBridge({}, {
+        bindings: [jsonBindings, regexBindings],
+    });
+    try {
+        await assertRejects(
+            () => bridge.execute('json.stringify = nil'),
+            Error,
+            'read-only table',
+        );
+
+        // Namespace still works after the rejected write
+        const out = await bridge.execute('return json.stringify({ a = 1 })');
+        assertEquals(out, '{"a":1}');
+    } finally {
+        bridge.close();
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Misconfiguration guards
+// ---------------------------------------------------------------------------
+
+const fakeEngine = {
+    global: { set() {}, get() { return undefined; } },
+    doString: () => Promise.resolve(undefined),
+    doStringSync: () => undefined,
+} as unknown as LuaEngineLike;
+
+@LuaBinder({ namespace: 'empty' })
+class EmptyBindings extends LuaBindings {}
+
+Deno.test('bindings: @LuaBinder with zero methods throws at install', async () => {
+    const binding = new EmptyBindings({ bridge: {} as never });
+    await assertRejects(
+        () => binding.install(fakeEngine),
+        Error,
+        'zero @LuaBinding',
+    );
+});
+
+@LuaBinder({ readonly: true })
+class ReadonlyGlobalBindings extends LuaBindings {
+    @LuaBinding({ name: 'nope' })
+    static nope(): number {
+        return 1;
+    }
+}
+
+Deno.test('bindings: readonly without a namespace throws at install', async () => {
+    const binding = new ReadonlyGlobalBindings({ bridge: {} as never });
+    await assertRejects(
+        () => binding.install(fakeEngine),
+        Error,
+        "without a 'namespace'",
+    );
+});
+
+// ---------------------------------------------------------------------------
+// TC39 stage-3 decorator convention
+// ---------------------------------------------------------------------------
+
+@LuaBinder({ namespace: 'tc39' })
+class Tc39Bindings extends LuaBindings {
+    static inc(n: number): number {
+        return n + 1;
+    }
+}
+
+Deno.test('bindings: supports TC39 stage-3 method decorators', async () => {
+    const apply = LuaBinding({ name: 'inc' }) as unknown as (
+        value: unknown,
+        context: unknown,
+    ) => void;
+
+    let initializer: ((this: unknown) => void) | undefined;
+    apply(Tc39Bindings.inc, {
+        kind: 'method',
+        name: 'inc',
+        static: true,
+        addInitializer(fn: (this: unknown) => void) {
+            initializer = fn;
+        },
+    });
+    assert(initializer, 'expected the TC39 decorator to register an initializer');
+    initializer.call(Tc39Bindings);
+
+    const bridge = await createLuaBridge({}, {
+        bindings: [(ctx: BindingContext) => new Tc39Bindings(ctx)],
+    });
+    try {
+        assertEquals(await bridge.execute('return tc39.inc(41)'), 42);
     } finally {
         bridge.close();
     }

@@ -39,6 +39,9 @@ export class GlobalBindings extends LuaBindings {
     /** Return the JS type name of a value. */
     @LuaBinding({ name: 'js_type' })
     static jsType(value: unknown): string {
+        if (Array.isArray(value)) return 'array';
+        if (value instanceof Map) return 'map';
+        if (value instanceof Set) return 'set';
         return typeof value;
     }
 
@@ -55,6 +58,11 @@ export class GlobalBindings extends LuaBindings {
         if (typeof value === 'object' && value !== null) return Object.keys(value).length;
         return 0;
     }
+
+    @LuaBinding({ name: 'js_null' })
+    static jsNull(o: unknown): boolean {
+        return o === null;
+    }
 }
 
-export default (ctx: BindingContext) => new GlobalBindings(ctx);
+export default (ctx: BindingContext): GlobalBindings => new GlobalBindings(ctx);
