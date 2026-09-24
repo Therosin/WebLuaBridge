@@ -152,6 +152,13 @@ export const WASM_URI: string = ${JSON.stringify(dataUri)};
             target: 'es2020',
             treeShaking: true,
             sourcemap: 'external',
+            banner: {
+                // This artifact deliberately uses Wasmoon's web loader because
+                // its WASM is an inlined data URI. Node 18+ supplies the Web APIs
+                // it needs, but must not be allowed to select Emscripten's
+                // filesystem-backed Node loader.
+                js: 'var process = undefined; var window = globalThis; var location = globalThis.location ?? { href: import.meta.url };',
+            },
             plugins: [denoNpmResolver(), nodeBuiltinStub()],
         });
 
