@@ -50,6 +50,7 @@ import {
 } from './utils.ts';
 import { LuaBindings } from './bindings.ts';
 import { LuaClass } from './lua_class.ts';
+import { guardWasmoonReturnStack } from './wasmoon-stack-guard.ts';
 import { BridgeError, ErrorCodes } from './errors.ts';
 import { VfsRegistry } from './vfs.ts';
 import { ExecutionService } from './execution.ts';
@@ -228,7 +229,9 @@ export class LuaBridge<
         }
 
         try {
-            this.lua = (await this.factory.createEngine(this.runtimeOptions)) as unknown as LuaEngine;
+            this.lua = guardWasmoonReturnStack(
+                (await this.factory.createEngine(this.runtimeOptions)) as unknown as LuaEngine,
+            );
             this.lua.global.set('Events', this.eventsApi);
 
             // Create composed services after engine is available
@@ -1029,4 +1032,3 @@ export async function runLuaCode<T = unknown>(code: string, ...args: unknown[]):
         throw error;
     }
 }
-
