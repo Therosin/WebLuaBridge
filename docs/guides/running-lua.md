@@ -95,6 +95,21 @@ The `signal` parameter works with `withExecutionLock()` for all execution method
 
 ---
 
+## Await inside JavaScript-entered Lua callbacks
+
+Lua code can await JavaScript promises directly with `:await()`. A Lua callback invoked later by JavaScript cannot yield across that callback boundary by itself. Wrap callbacks that need to await with the built-in `async()` trampoline:
+
+```lua
+timers.setTimeout(async(function()
+  local value = fetchValue():await()
+  print("received", value)
+end), 1000)
+```
+
+`async()` is installed globally by WebLuaBridge and does not require `loadCommon()`. Use it for timers and other host APIs that invoke Lua callbacks asynchronously. Promise support is enabled by the bridge's default Wasmoon runtime options.
+
+---
+
 ## Raw execution (bypasses lock)
 
 When async isn't practical:

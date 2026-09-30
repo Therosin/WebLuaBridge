@@ -55,6 +55,7 @@ import { BridgeError, ErrorCodes } from './errors.ts';
 import { VfsRegistry } from './vfs.ts';
 import { ExecutionService } from './execution.ts';
 import { EnvironmentService } from './environment.ts';
+import { ASYNC_LUA_SOURCE } from '../async_lua_content.ts';
 
 /**
  * Type-safe Lua runtime bridge backed by Wasmoon.
@@ -258,6 +259,9 @@ export class LuaBridge<
                     this.lua.global.set(name, value);
                 }
             }
+
+            // Reserve `async` for the Lua-to-JS callback trampoline.
+            await this.lua.doString(ASYNC_LUA_SOURCE);
 
             // Mount any pre-configured files via VfsRegistry
             await this.vfs.mountPending();

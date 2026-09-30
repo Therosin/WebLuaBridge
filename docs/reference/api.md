@@ -490,6 +490,7 @@ class LuaClass {
   method(name: string, fn: Function): this;
   value(name: string, val: unknown): this;
   callable(): this;
+  call<TArgs extends unknown[]>(handler: (...args: TArgs) => unknown): this;
   readonly(): this;
   index(handler: (self: any, key: string) => unknown): this;
   newIndex(handler: (self: any, key: string, value: unknown) => void): this;
@@ -516,7 +517,13 @@ class LuaBindings {
 // Decorators
 function LuaBinder(options: LuaBinderOptions): ClassDecorator;
 function LuaBinding(options: LuaBindingOptions): MethodDecorator;
+function LuaCall(options?: LuaBindingOptions): MethodDecorator;
+function LuaIndex(options?: LuaBindingOptions): MethodDecorator;
+function LuaNewIndex(options?: LuaBindingOptions): MethodDecorator;
+function bindingDocs(bindingClass: LuaBindingClass): LuaBindingDocs;
 ```
+
+`bindingDocs()` returns `{ className, namespace?, readonly, callable, methods }`. Each method entry includes its Lua name, source method name, role (`method`, `call`, `index`, or `newIndex`), and any supplied description, arguments, return type, and documentation flags.
 
 ### LuaBinderOptions
 
@@ -526,8 +533,8 @@ function LuaBinding(options: LuaBindingOptions): MethodDecorator;
   readonly?: boolean;    // Reject writes to namespace table (requires namespace)
   callable?: boolean;    // Make namespace callable
   hooks?: {
-    before?: (methodName: string, args: unknown[]) => void;
-    after?: (methodName: string, result: unknown) => void;
+    before?: (...args: unknown[]) => void | Promise<void>;
+    after?: (...args: unknown[]) => void | Promise<void>;
   };
 }
 ```
@@ -537,20 +544,39 @@ function LuaBinding(options: LuaBindingOptions): MethodDecorator;
 ```ts
 {
   name?: string;                       // Name in Lua (defaults to JS name)
+  description?: string;                // Generated documentation
   args?: Array<{ name: string; type: unknown }>;  // Arg descriptors
   returnType?: unknown;                // Return type descriptor
-  isMethod?: boolean;                  // First arg is self (: syntax)
-  isAsync?: boolean;                   // Returns a Promise
+  isMethod?: boolean;                  // Documentation metadata for Lua : call style
+  isAsync?: boolean;                   // Documentation metadata indicating a Promise return
 }
+
+// LuaBindingDocs describes namespace/class options and each method's source
+// name, Lua name, role, description, argument metadata, and return metadata.
 ```
 
 ### BindingContext
 
 ```ts
 {
-  bridge: LuaBridgeEventApi;  // Event-only view of the bridge
+  bridge: LuaBridge;           // Full bridge instance
 }
 ```
+
+`withExecutionLock()` retains its no-argument callback contract. Nested bridge calls inside the callback can use the original bridge instance.
+
+### Lua `async()` callback helper
+
+Every bridge runtime installs a global Lua `async(callback)` helper. Wrap a Lua callback with it when JavaScript invokes that callback and the callback may call `:await()`:
+
+```lua
+timers.setTimeout(async(function()
+  local value = fetchValue():await()
+  print(value)
+end), 1000)
+```
+
+Direct Lua-to-JavaScript Promise awaiting remains supported. `async()` adapts the opposite direction by running the callback in a Lua coroutine and returning a Promise to JavaScript.
 
 ---
 
