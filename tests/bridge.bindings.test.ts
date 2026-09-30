@@ -17,7 +17,7 @@
  * along with WebLuaBridge.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { assertEquals, assert, assertRejects } from '@std/assert';
+import { assertEquals, assert, assertRejects, assertThrows } from '@std/assert';
 import {
     createLuaBridge,
     globalBindings,
@@ -133,6 +133,27 @@ Deno.test('LuaClass: explicit call handler and readonly custom index coexist', a
             Error,
             'read-only table',
         );
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('LuaClass: callable tables require a call handler only when callable', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        assertThrows(
+            () => bridge.setGlobal(
+                'MissingCallHandler',
+                new LuaClass({ name: 'MissingCallHandler' }).callable(),
+            ),
+            Error,
+            'has no call handler',
+        );
+        bridge.setGlobal(
+            'NotCallable',
+            new LuaClass({ name: 'NotCallable' }).callable(false),
+        );
+        assertEquals(await bridge.execute('return type(NotCallable)'), 'table');
     } finally {
         bridge.close();
     }
@@ -804,11 +825,14 @@ const reviewedHookTrace: unknown[][] = [];
 @LuaBinder({
     namespace: 'reviewed_hooks',
     hooks: {
-        before: (...args) => {
-            reviewedHookTrace.push(['before', ...args]);
+        before: (methodName, args) => {
+            reviewedHookTrace.push(['before', methodName, args]);
         },
-        after: (...args) => {
-            reviewedHookTrace.push(['after', ...args]);
+        after: (methodName, args, result) => {
+            reviewedHookTrace.push(['after', methodName, args, result]);
+        },
+        error: (methodName, args, error) => {
+            reviewedHookTrace.push(['error', methodName, args, (error as Error).message]);
         },
     },
 })
@@ -886,6 +910,14 @@ class ReviewedRoles extends LuaBindings {
     }
 }
 
+@LuaBinder({ namespace: 'missing_call_handler', callable: true })
+class MissingCallHandlerBinding extends LuaBindings {
+    @LuaBinding()
+    static ping(): string {
+        return 'pong';
+    }
+}
+
 Deno.test('bindingDocs exposes exporter-neutral decorator metadata', () => {
     const docs = bindingDocs(ReviewedHooks);
     assertEquals(docs.namespace, 'reviewed_hooks');
@@ -921,7 +953,17 @@ Deno.test('Lua-specific binding roles create callable and computed namespace beh
     }
 });
 
-Deno.test('binding hooks preserve argument signatures and run after async methods settle', async () => {
+Deno.test('callable LuaBinder requires a LuaCall handler', async () => {
+    await assertRejects(
+        () => createLuaBridge({}, {
+            bindings: [(ctx: BindingContext) => new MissingCallHandlerBinding(ctx)],
+        }),
+        Error,
+        'has no call handler',
+    );
+});
+
+Deno.test('binding hooks receive method context, settled results, and async failures', async () => {
     reviewedHookTrace.length = 0;
     const bridge = await createLuaBridge({}, {
         bindings: [(ctx: BindingContext) => new ReviewedHooks(ctx)],
@@ -929,15 +971,18 @@ Deno.test('binding hooks preserve argument signatures and run after async method
     try {
         assertEquals(await bridge.execute('return reviewed_hooks.async_value(41)'), 42);
         assertEquals(reviewedHookTrace.slice(0, 2), [
-            ['before', 41],
-            ['after', 41],
+            ['before', 'async_value', [41]],
+            ['after', 'async_value', [41], 42],
         ]);
         await assertRejects(
             () => bridge.execute('return reviewed_hooks.failure()'),
             Error,
             'expected failure',
         );
-        assertEquals(reviewedHookTrace.slice(-1), [['before']]);
+        assertEquals(reviewedHookTrace.slice(-2), [
+            ['before', 'failure', []],
+            ['error', 'failure', [], 'expected failure'],
+        ]);
     } finally {
         bridge.close();
     }

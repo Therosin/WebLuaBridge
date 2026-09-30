@@ -39,12 +39,14 @@ export interface LuaBinderOptions {
     /** If true, the namespace table rejects writes with an error. Requires `namespace`. */
     readonly?: boolean;
     /**
-     * Lifecycle hooks called before/after each binding invocation. Both hooks
-     * receive the Lua arguments; `after` runs after returned promises settle.
+     * Lifecycle hooks called around each binding invocation. `before` receives
+     * the Lua name and arguments; `after` also receives the resolved result;
+     * `error` receives the thrown or rejected error. Async hooks are awaited.
      */
     hooks?: {
-        before?: (...args: unknown[]) => void | Promise<void>;
-        after?: (...args: unknown[]) => void | Promise<void>;
+        before?: (methodName: string, args: unknown[]) => void | Promise<void>;
+        after?: (methodName: string, args: unknown[], result: unknown) => void | Promise<void>;
+        error?: (methodName: string, args: unknown[], error: unknown) => void | Promise<void>;
     };
     /** If true, the namespace table is callable through a method marked with `@LuaCall`. */
     callable?: boolean;
@@ -375,26 +377,57 @@ export class LuaBindings {
             const bound = fn.bind(this) as (...args: unknown[]) => unknown;
             const invoke = opts.hooks
                 ? (...args: unknown[]): unknown => {
-                    const { before, after } = opts.hooks!;
+                    const { before, after, error: onError } = opts.hooks!;
                     const isThenable = (value: unknown): value is PromiseLike<unknown> =>
                         value !== null &&
                         (typeof value === 'object' || typeof value === 'function') &&
                         typeof (value as PromiseLike<unknown>).then === 'function';
-                    const runAfter = (result: unknown): unknown => {
-                        const afterResult = after?.apply(this, args);
-                        return isThenable(afterResult)
-                            ? Promise.resolve(afterResult).then(() => result)
-                            : result;
+                    const reportError = (failure: unknown): unknown => {
+                        if (!onError) throw failure;
+                        let report: unknown;
+                        try {
+                            report = onError.call(this, luaName, args, failure);
+                        } catch {
+                            throw failure;
+                        }
+                        if (isThenable(report)) {
+                            return Promise.resolve(report).then(
+                                () => { throw failure; },
+                                () => { throw failure; },
+                            );
+                        }
+                        throw failure;
                     };
                     const runBinding = (): unknown => {
-                        const result = bound(...args);
+                        let result: unknown;
+                        try {
+                            result = bound(...args);
+                        } catch (failure) {
+                            return reportError(failure);
+                        }
+                        const runAfter = (settledResult: unknown): unknown => {
+                            let afterResult: unknown;
+                            try {
+                                afterResult = after?.call(this, luaName, args, settledResult);
+                            } catch (failure) {
+                                return reportError(failure);
+                            }
+                            return isThenable(afterResult)
+                                ? Promise.resolve(afterResult).then(() => settledResult, reportError)
+                                : settledResult;
+                        };
                         return isThenable(result)
-                            ? Promise.resolve(result).then(runAfter)
+                            ? Promise.resolve(result).then(runAfter, reportError)
                             : runAfter(result);
                     };
-                    const beforeResult = before?.apply(this, args);
+                    let beforeResult: unknown;
+                    try {
+                        beforeResult = before?.call(this, luaName, args);
+                    } catch (failure) {
+                        return reportError(failure);
+                    }
                     return isThenable(beforeResult)
-                        ? Promise.resolve(beforeResult).then(runBinding)
+                        ? Promise.resolve(beforeResult).then(runBinding, reportError)
                         : runBinding();
                 }
                 : bound;
@@ -423,6 +456,12 @@ export class LuaBindings {
             ? resolved.find((method) => method.role === 'method' && method.luaName === '__call')
             : undefined;
         const callHandler = callHandlers[0] ?? legacyCall;
+
+        if (targetName && opts.callable && !callHandler) {
+            throw new Error(
+                `@LuaBinder on '${this.constructor.name || 'anonymous class'}' enables 'callable' but has no call handler. Add a static @LuaCall method.`,
+            );
+        }
 
         for (const method of resolved) {
             if (method.role === 'method') {

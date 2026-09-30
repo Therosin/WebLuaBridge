@@ -292,17 +292,20 @@ static async fetchData(url: string): Promise<string> {
 
 ### Binding hooks
 
-`@LuaBinder` supports invocation hooks. Both hooks receive the Lua arguments. `after` runs after an async binding resolves; the hook signatures remain the same for synchronous and asynchronous methods.
+`@LuaBinder` supports invocation hooks. Hooks receive the Lua method name and the arguments as an array. `after` also receives the binding result, after any returned promise resolves. `error` receives the thrown or rejected error. Hook promises are awaited. If an error hook itself fails, the original binding or hook error is preserved.
 
 ```ts
 @LuaBinder({
   namespace: "analytics",
   hooks: {
-    before: (event) => {
-      console.log(`Before ${event}`);
+    before: (methodName, args) => {
+      console.log(`Before ${methodName}`, args);
     },
-    after: (event) => {
-      console.log(`After ${event}`);
+    after: (methodName, args, result) => {
+      console.log(`After ${methodName}`, args, result);
+    },
+    error: (methodName, args, error) => {
+      console.error(`Failed ${methodName}`, args, error);
     },
   },
 })

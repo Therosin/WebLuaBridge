@@ -250,6 +250,16 @@ export class LuaClass {
     }
 
     private buildConfig(name: string): Record<string, unknown> {
+        if (
+            this._options.callable &&
+            !this._options.callHandler &&
+            !this._values.has('__call')
+        ) {
+            throw new Error(
+                `LuaClass '${name}' is callable but has no call handler. Use call(handler) or method('__call', handler).`,
+            );
+        }
+
         const config: Record<string, unknown> = {
             name: name,
             values: Object.fromEntries(this._values),

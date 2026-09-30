@@ -533,11 +533,14 @@ function bindingDocs(bindingClass: LuaBindingClass): LuaBindingDocs;
   readonly?: boolean;    // Reject writes to namespace table (requires namespace)
   callable?: boolean;    // Make namespace callable
   hooks?: {
-    before?: (...args: unknown[]) => void | Promise<void>;
-    after?: (...args: unknown[]) => void | Promise<void>;
+    before?: (methodName: string, args: unknown[]) => void | Promise<void>;
+    after?: (methodName: string, args: unknown[], result: unknown) => void | Promise<void>;
+    error?: (methodName: string, args: unknown[], error: unknown) => void | Promise<void>;
   };
 }
 ```
+
+Hooks receive the Lua-visible method name and Lua arguments as an array. `after` runs after asynchronous binding results settle and receives the result. `error` runs when the before hook, binding, or after hook throws or rejects. If the error hook fails, the original error is rethrown.
 
 ### LuaBindingOptions
 

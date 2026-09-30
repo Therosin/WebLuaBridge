@@ -54,7 +54,7 @@ Passed to the `@LuaBinder` decorator.
 | `namespace` | `string` | — | Lua namespace table (omit to put methods in `_G`) |
 | `readonly` | `boolean` | `false` | Reject writes to the namespace table (requires `namespace`; throws if set without one) |
 | `callable` | `boolean` | `false` | Make the namespace callable through an explicit `@LuaCall` handler |
-| `hooks` | `{ before?, after? }` | — | Invocation hooks receive Lua arguments; `after` runs after async completion |
+| `hooks` | `{ before?, after?, error? }` | — | Hooks receive method name and argument array; `after` also receives the settled result, and `error` receives failures |
 
 ---
 

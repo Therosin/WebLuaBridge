@@ -26,7 +26,7 @@ function async(callback)
         end
 
         if safe and result == Promise.resolve(result) then
-          result:finally(step)
+          result:finally(step):catch(function() end)
         else
           step()
         end
@@ -40,7 +40,7 @@ function async(callback)
         return resolve(result)
       end
 
-      result:finally(step)
+      result:finally(step):catch(function() end)
     end)
   end
 end
