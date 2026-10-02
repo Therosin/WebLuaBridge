@@ -65,8 +65,7 @@ Make the table itself callable like a function:
 
 ```ts
 const cls = new LuaClass({ name: "Counter" })
-  .method("__call", (self: any, n: number) => n + 1)
-  .callable();
+  .call((n: number) => n + 1);
 
 bridge.Set("Counter", cls);
 ```
@@ -75,7 +74,7 @@ bridge.Set("Counter", cls);
 local result = Counter(41) -- 42
 ```
 
-The `__call` method receives `self` as the first argument.
+The explicit handler receives only the Lua arguments; the table itself is not passed as a synthetic JavaScript constructor argument.
 
 ### Custom index handler
 
@@ -112,7 +111,7 @@ const cls = new LuaClass({ name: "Validator" })
 bridge.Set("Validator", cls);
 ```
 
-> If you also use `.readonly()`, the readonly guard takes priority over the newindex handler.
+> If you also use `.readonly()`, writes remain rejected instead of reaching the `newIndex` handler. A custom index handler can still supply values for missing reads.
 
 ### Manual installation
 
@@ -215,20 +214,31 @@ Lua cannot add, overwrite, or remove keys in a read-only namespace:
 
 ### Callable namespaces
 
-Make a namespace callable from Lua:
+Make a namespace callable from Lua through an explicitly designated binding method. This calls the Lua-facing factory; it does not invoke the JavaScript binding class constructor.
 
 ```ts
-@LuaBinder({ namespace: "mathx", callable: true })
+@LuaBinder({ namespace: "mathx" })
 class MathBindings extends LuaBindings {
-  @LuaBinding({ name: "__call" })
-  static call(a: number, b: number): number {
-    return a * b;
+  @LuaCall()
+  static create(a: number, b: number): number {
+    return a + b;
   }
 }
 ```
 
 ```lua
-print(mathx(6, 7)) -- 42
+print(mathx(6, 7)) -- 13
+```
+
+`@LuaIndex()` and `@LuaNewIndex()` designate handlers for missing-field reads and writes without requiring methods literally named `__index` or `__newindex`. They receive the key (and, for writes, the value); binding instance state remains available through `this`.
+
+### Binding metadata
+
+`bindingDocs(SomeBindings)` returns the class's decorator metadata without constructing the binding or starting Lua. Its structured output can be used by LuaLS, Markdown, or other documentation exporters. The shape of argument and return type descriptors is still intentionally open; values supplied in `args` and `returnType` are carried through for exporters to interpret.
+
+```ts
+const docs = bindingDocs(MathBindings);
+// docs.namespace, docs.methods, docs.methods[0].args, docs.methods[0].returnType
 ```
 
 ### Multiple binding modules
@@ -247,27 +257,30 @@ Each module installs into its own namespace (or `_G` if no namespace is given).
 
 ### Accessing the bridge from bindings
 
-The `ctx` parameter (`BindingContext`) gives access to the bridge instance:
+The `ctx` parameter (`BindingContext`) gives access to the full bridge, including Lua execution and global access:
 
 ```ts
 @LuaBinder({ namespace: "events" })
 class EventBindings extends LuaBindings {
-  @LuaBinding({ name: "fire" })
-  static fire(event: string, data: unknown): void {
-    this.ctx.bridge.emit(event, data);
+  @LuaBinding({ name: "get_global" })
+  static async getGlobal(name: string): Promise<unknown> {
+    return await this.ctx.bridge.Get(name);
   }
 }
 ```
+
+Bindings can also use `execute`, `call`, `Set`, and the other public bridge methods through `ctx.bridge`.
 
 ### Binding option reference
 
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `name` | `string` | JS method name | Name exposed to Lua |
-| `args` | `Array<{name, type}>` | — | Argument descriptors (documentation) |
-| `returnType` | `unknown` | — | Expected return type (documentation) |
-| `isMethod` | `boolean` | `false` | First arg is `self` (Lua `:` syntax) |
-| `isAsync` | `boolean` | `false` | Binding returns a Promise |
+| `description` | `string` | — | Description for generated documentation |
+| `args` | `Array<{name, type}>` | — | Argument metadata for documentation exporters |
+| `returnType` | `unknown` | — | Return metadata for documentation exporters |
+| `isMethod` | `boolean` | `false` | Documentation metadata for Lua `:` call style |
+| `isAsync` | `boolean` | `false` | Documentation metadata indicating the implementation returns a Promise |
 
 ```ts
 @LuaBinding({ name: "fetch", isAsync: true })
@@ -279,7 +292,7 @@ static async fetchData(url: string): Promise<string> {
 
 ### Binding hooks
 
-`@LuaBinder` supports lifecycle hooks:
+`@LuaBinder` supports invocation hooks. Hooks receive the Lua method name and the arguments as an array. `after` also receives the binding result, after any returned promise resolves. `error` receives the thrown or rejected error. Hook promises are awaited. If an error hook itself fails, the original binding or hook error is preserved.
 
 ```ts
 @LuaBinder({
@@ -288,8 +301,11 @@ static async fetchData(url: string): Promise<string> {
     before: (methodName, args) => {
       console.log(`Before ${methodName}`, args);
     },
-    after: (methodName, result) => {
-      console.log(`After ${methodName}`, result);
+    after: (methodName, args, result) => {
+      console.log(`After ${methodName}`, args, result);
+    },
+    error: (methodName, args, error) => {
+      console.error(`Failed ${methodName}`, args, error);
     },
   },
 })

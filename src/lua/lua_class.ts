@@ -42,14 +42,23 @@ function buildHelperCode(): string {
         -- therefore always triggers __newindex.
         local target = config.readonly and {} or data
 
-        if config.callable and data.__call then
+        local call_handler = config.call_handler or data.__call
+        if config.callable and call_handler then
             mt.__call = function(_, ...)
-                return data.__call(...)
+                return call_handler(...)
             end
         end
 
         if config.readonly then
-            mt.__index = data
+            if config.index then
+                mt.__index = function(self, k)
+                    local value = data[k]
+                    if value ~= nil then return value end
+                    return config.index(self, k)
+                end
+            else
+                mt.__index = data
+            end
             mt.__newindex = function(_, k)
                 error("Cannot modify read-only table '" .. tostring(config.name) .. "'", 2)
             end
@@ -95,8 +104,11 @@ export class LuaClass {
         name: string;
         readonly: boolean;
         callable: boolean;
+        callHandler?: (...args: unknown[]) => unknown;
         hasCustomIndex: boolean;
         hasCustomNewIndex: boolean;
+        indexHandler?: (self: unknown, key: string) => unknown;
+        newIndexHandler?: (self: unknown, key: string, value: unknown) => void;
     };
 
     constructor(options?: { name?: string }) {
@@ -112,7 +124,11 @@ export class LuaClass {
     /** Add a method (JS function) to the Lua table. */
     // deno-lint-ignore no-explicit-any
     method(name: string, fn: (...args: any[]) => unknown): this {
-        if (typeof fn !== 'function') throw new Error(`LuaClass.method(${name}): value must be a function`);
+        if (typeof fn !== 'function') {
+            throw new Error(
+                `LuaClass.method(${name}): value must be a function`,
+            );
+        }
         this._values.set(name, fn);
         return this;
     }
@@ -129,9 +145,19 @@ export class LuaClass {
         return this;
     }
 
-    /** Make the namespace callable via `__call` metamethod (invokes `__call` method if registered). */
+    /** Enable the `__call` metamethod. Pair with call(handler) or legacy method("__call", handler). */
     callable(v: boolean = true): this {
         this._options.callable = v;
+        return this;
+    }
+
+    /** Make the table callable through an explicit JS handler. */
+    call<TArgs extends unknown[]>(handler: (...args: TArgs) => unknown): this {
+        if (typeof handler !== 'function') {
+            throw new Error('LuaClass.call(): handler must be a function');
+        }
+        this._options.callHandler = handler as (...args: unknown[]) => unknown;
+        this._options.callable = true;
         return this;
     }
 
@@ -139,7 +165,7 @@ export class LuaClass {
     // reason: Lua metatable index handler receives raw table reference
     // deno-lint-ignore no-explicit-any
     index(handler: (self: any, key: string) => any): this {
-        this._values.set('__index_handler', handler);
+        this._options.indexHandler = handler;
         this._options.hasCustomIndex = true;
         return this;
     }
@@ -148,7 +174,7 @@ export class LuaClass {
     // reason: Lua metatable index handler receives raw table reference
     // deno-lint-ignore no-explicit-any
     newIndex(handler: (self: any, key: string, value: any) => void): this {
-        this._values.set('__newindex_handler', handler);
+        this._options.newIndexHandler = handler;
         this._options.hasCustomNewIndex = true;
         return this;
     }
@@ -224,6 +250,16 @@ export class LuaClass {
     }
 
     private buildConfig(name: string): Record<string, unknown> {
+        if (
+            this._options.callable &&
+            !this._options.callHandler &&
+            !this._values.has('__call')
+        ) {
+            throw new Error(
+                `LuaClass '${name}' is callable but has no call handler. Use call(handler) or method('__call', handler).`,
+            );
+        }
+
         const config: Record<string, unknown> = {
             name: name,
             values: Object.fromEntries(this._values),
@@ -231,19 +267,18 @@ export class LuaClass {
             callable: this._options.callable,
         };
 
+        if (this._options.callHandler) {
+            config.call_handler = this._options.callHandler;
+        }
+
         if (this._options.hasCustomIndex) {
-            config.index = this._values.get('__index_handler');
-            const vals = { ...(config.values as Record<string, unknown>) };
-            delete vals.__index_handler;
-            config.values = vals;
+            config.index = this._options.indexHandler;
         }
         if (this._options.hasCustomNewIndex) {
-            config.newindex = this._values.get('__newindex_handler');
-            const vals = { ...(config.values as Record<string, unknown>) };
-            delete vals.__newindex_handler;
-            config.values = vals;
+            config.newindex = this._options.newIndexHandler;
         }
 
         return config;
     }
+
 }

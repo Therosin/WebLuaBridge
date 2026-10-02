@@ -27,6 +27,8 @@ import type { BindingContext, LuaEngineLike } from './types.ts';
 const BINDER_OPTIONS = Symbol('LuaBinder:options');
 const BINDING_METHODS = Symbol('LuaBinder:methods');
 
+export type LuaBindingRole = 'method' | 'call' | 'index' | 'newIndex';
+
 // ---------------------------------------------------------------------------
 // Public option types
 // ---------------------------------------------------------------------------
@@ -37,27 +39,31 @@ export interface LuaBinderOptions {
     /** If true, the namespace table rejects writes with an error. Requires `namespace`. */
     readonly?: boolean;
     /**
-     * Lifecycle hooks called before/after each binding invocation.
-     * Implemented via `__index`/`__newindex` metatable interception.
+     * Lifecycle hooks called around each binding invocation. `before` receives
+     * the Lua name and arguments; `after` also receives the resolved result;
+     * `error` receives the thrown or rejected error. Async hooks are awaited.
      */
     hooks?: {
-        before?: (...args: unknown[]) => void;
-        after?: (...args: unknown[]) => void;
+        before?: (methodName: string, args: unknown[]) => void | Promise<void>;
+        after?: (methodName: string, args: unknown[], result: unknown) => void | Promise<void>;
+        error?: (methodName: string, args: unknown[], error: unknown) => void | Promise<void>;
     };
-    /** If true, the namespace table is callable (via `__call` → calls the class constructor / a registered `__call` method). */
+    /** If true, the namespace table is callable through a method marked with `@LuaCall`. */
     callable?: boolean;
 }
 
 export interface LuaBindingOptions {
     /** Name exposed to Lua. Defaults to the JS method name. */
     name?: string;
-    /** Argument descriptors (used for documentation / future validation). */
+    /** Description for generated reference documentation. */
+    description?: string;
+    /** Argument metadata for binding documentation exporters. */
     args?: Array<{ name: string; type: unknown }>;
-    /** Expected return type (used for documentation / future validation). */
+    /** Return metadata for binding documentation exporters. */
     returnType?: unknown;
-    /** If true, the first argument is the instance (`self` in Lua method call syntax). */
+    /** Documentation metadata: this binding is intended for Lua `:` method-call syntax. */
     isMethod?: boolean;
-    /** If true, the binding returns a Promise and yields in Lua. */
+    /** Documentation metadata: the JS implementation returns a Promise. */
     isAsync?: boolean;
 }
 
@@ -75,13 +81,18 @@ export interface LuaBindingOptions {
  * class MyBindings extends LuaBindings { ... }
  * ```
  */
-// reason: decorator constructor signature uses any intentionally
+// reason: decorator constructor signature allows arbitrary constructor parameters
 // deno-lint-ignore no-explicit-any
-export function LuaBinder(options: LuaBinderOptions): <T extends new (...args: any[]) => any>(constructor: T) => void {
-    // reason: decorator constructor signature uses any intentionally
-    // deno-lint-ignore no-explicit-any
-    return function <T extends new (...args: any[]) => any>(constructor: T): void {
-        (constructor as unknown as Record<symbol, LuaBinderOptions>)[BINDER_OPTIONS] = options;
+type BindingConstructor = new (...args: any[]) => any;
+export type LuaBindingClass = BindingConstructor & { readonly name: string };
+
+export function LuaBinder(
+    options: LuaBinderOptions,
+): <T extends BindingConstructor>(constructor: T) => void {
+    return function <T extends BindingConstructor>(constructor: T): void {
+        (constructor as unknown as Record<symbol, LuaBinderOptions>)[
+            BINDER_OPTIONS
+        ] = options;
     };
 }
 
@@ -99,17 +110,32 @@ export function LuaBinder(options: LuaBinderOptions): <T extends new (...args: a
  * static greet(name: string): string { return `Hello ${name}`; }
  * ```
  */
-export function LuaBinding(
+type LuaMethodDecorator = (
+    target: unknown,
+    propertyKeyOrContext: unknown,
+    descriptor?: PropertyDescriptor,
+) => void;
+
+function luaMethodDecorator(
+    role: LuaBindingRole,
     options: LuaBindingOptions = {},
-): (target: unknown, propertyKeyOrContext: unknown, descriptor?: PropertyDescriptor) => void {
+): LuaMethodDecorator {
     return function (
         target: unknown,
         propertyKeyOrContext: unknown,
         _descriptor?: PropertyDescriptor,
     ): void {
         // Legacy decorators: (constructor, propertyKey, descriptor)
-        if (typeof propertyKeyOrContext === 'string' || typeof propertyKeyOrContext === 'symbol') {
-            registerBinding(target, options, String(propertyKeyOrContext));
+        if (
+            typeof propertyKeyOrContext === 'string' ||
+            typeof propertyKeyOrContext === 'symbol'
+        ) {
+            registerBinding(
+                target,
+                options,
+                String(propertyKeyOrContext),
+                role,
+            );
             return;
         }
 
@@ -127,7 +153,9 @@ export function LuaBinding(
             throw new TypeError('@LuaBinding can only be applied to methods');
         }
         if (context.static !== true) {
-            throw new TypeError('@LuaBinding must be applied to a static method');
+            throw new TypeError(
+                '@LuaBinding must be applied to a static method',
+            );
         }
         if (typeof context.addInitializer !== 'function') {
             throw new TypeError(
@@ -137,19 +165,105 @@ export function LuaBinding(
 
         const key = String(context.name);
         context.addInitializer(function (this: unknown): void {
-            registerBinding(this, options, key);
+            registerBinding(this, options, key, role);
         });
     };
 }
 
-type BindingMethodRecord = LuaBindingOptions & { key: string };
+export function LuaBinding(
+    options: LuaBindingOptions = {},
+): LuaMethodDecorator {
+    return luaMethodDecorator('method', options);
+}
+
+/** Mark a static binding method as the Lua table's callable factory. */
+export function LuaCall(options: LuaBindingOptions = {}): LuaMethodDecorator {
+    return luaMethodDecorator('call', options);
+}
+
+/** Mark a static binding method as the handler for reads of missing Lua fields. */
+export function LuaIndex(options: LuaBindingOptions = {}): LuaMethodDecorator {
+    return luaMethodDecorator('index', options);
+}
+
+/** Mark a static binding method as the handler for Lua field writes. */
+export function LuaNewIndex(
+    options: LuaBindingOptions = {},
+): LuaMethodDecorator {
+    return luaMethodDecorator('newIndex', options);
+}
+
+type BindingMethodRecord = LuaBindingOptions & {
+    key: string;
+    role: LuaBindingRole;
+};
 
 /** Attach a method binding record to a class constructor's metadata. */
-function registerBinding(target: unknown, options: LuaBindingOptions, key: string): void {
+function registerBinding(
+    target: unknown,
+    options: LuaBindingOptions,
+    key: string,
+    role: LuaBindingRole,
+): void {
     const record = target as Record<symbol, BindingMethodRecord[]>;
-    const existing = record[BINDING_METHODS] || [];
-    existing.push({ ...options, key });
+    const inherited = record[BINDING_METHODS] || [];
+    const existing = Object.prototype.hasOwnProperty.call(record, BINDING_METHODS) ? inherited : [...inherited];
+    existing.push({ ...options, key, role });
     record[BINDING_METHODS] = existing;
+}
+
+export interface LuaBindingMethodDocs {
+    name: string;
+    sourceName: string;
+    role: LuaBindingRole;
+    description?: string;
+    args?: LuaBindingOptions['args'];
+    returnType?: unknown;
+    isMethod?: boolean;
+    isAsync?: boolean;
+}
+
+/** Structured, exporter-neutral description of a decorated binding class. */
+export interface LuaBindingDocs {
+    className: string;
+    namespace?: string;
+    readonly: boolean;
+    callable: boolean;
+    methods: LuaBindingMethodDocs[];
+}
+
+/**
+ * Read decorator metadata without creating a binding instance or Lua runtime.
+ * The returned structure is intended as input to LuaLS, Markdown, or other
+ * documentation exporters. Argument type schema remains the caller's declared
+ * value until a shared type vocabulary is defined.
+ */
+export function bindingDocs(
+    bindingClass: LuaBindingClass,
+): LuaBindingDocs {
+    const ctor = bindingClass as unknown as {
+        [BINDER_OPTIONS]?: LuaBinderOptions;
+        [BINDING_METHODS]?: BindingMethodRecord[];
+    };
+    const binder = ctor[BINDER_OPTIONS] ?? {};
+    const methods = ctor[BINDING_METHODS] ?? [];
+    return {
+        className: bindingClass.name,
+        ...(binder.namespace === undefined ? {} : { namespace: binder.namespace }),
+        readonly: binder.readonly ?? false,
+        callable: binder.callable === true ||
+            methods.some((m) => m.role === 'call'),
+        methods: methods.map((method) => ({
+            name: method.name || method.key,
+            sourceName: method.key,
+            role: method.role,
+            ...(method.description === undefined ? {} : { description: method.description }),
+            ...(method.args === undefined ? {} : { args: method.args.map((arg) => ({ ...arg })) }),
+            ...(method.returnType === undefined ? {} : { returnType: method.returnType }),
+            ...(method.isMethod === undefined ? {} : { isMethod: method.isMethod }),
+            ...(method.isAsync === undefined ? {} : { isAsync: method.isAsync }),
+        })),
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -204,7 +318,7 @@ export class LuaBindings {
     async install(lua: LuaEngineLike): Promise<void> {
         const ctor = this.constructor as unknown as {
             [BINDER_OPTIONS]: LuaBinderOptions;
-            [BINDING_METHODS]: Array<LuaBindingOptions & { key: string }>;
+            [BINDING_METHODS]: BindingMethodRecord[];
         };
 
         const binderOptions = ctor[BINDER_OPTIONS];
@@ -231,12 +345,26 @@ export class LuaBindings {
         }
 
         const targetName = opts.namespace;
+        const specialMethods = methods.filter((method) => method.role !== 'method');
+        if (specialMethods.length > 0 && !targetName) {
+            throw new Error(
+                `@Lua${specialMethods[0].role} requires a named namespace`,
+            );
+        }
 
         // Build the LuaClass
         const luaClass = new LuaClass({ name: targetName });
 
         if (opts.readonly) luaClass.readonly();
         if (opts.callable) luaClass.callable();
+
+        const resolved: Array<
+            {
+                role: LuaBindingRole;
+                luaName: string;
+                bound: (...args: unknown[]) => unknown;
+            }
+        > = [];
 
         // Add each method — bind `this` to the instance so static methods can access `this.ctx`
         for (const method of methods) {
@@ -246,27 +374,111 @@ export class LuaBindings {
             if (typeof fn !== 'function') continue;
 
             const luaName = method.name || method.key;
-            const bound = fn.bind(this);
+            const bound = fn.bind(this) as (...args: unknown[]) => unknown;
+            const invoke = opts.hooks
+                ? (...args: unknown[]): unknown => {
+                    const { before, after, error: onError } = opts.hooks!;
+                    const isThenable = (value: unknown): value is PromiseLike<unknown> =>
+                        value !== null &&
+                        (typeof value === 'object' || typeof value === 'function') &&
+                        typeof (value as PromiseLike<unknown>).then === 'function';
+                    const reportError = (failure: unknown): unknown => {
+                        if (!onError) throw failure;
+                        let report: unknown;
+                        try {
+                            report = onError.call(this, luaName, args, failure);
+                        } catch {
+                            throw failure;
+                        }
+                        if (isThenable(report)) {
+                            return Promise.resolve(report).then(
+                                () => { throw failure; },
+                                () => { throw failure; },
+                            );
+                        }
+                        throw failure;
+                    };
+                    const runBinding = (): unknown => {
+                        let result: unknown;
+                        try {
+                            result = bound(...args);
+                        } catch (failure) {
+                            return reportError(failure);
+                        }
+                        const runAfter = (settledResult: unknown): unknown => {
+                            let afterResult: unknown;
+                            try {
+                                afterResult = after?.call(this, luaName, args, settledResult);
+                            } catch (failure) {
+                                return reportError(failure);
+                            }
+                            return isThenable(afterResult)
+                                ? Promise.resolve(afterResult).then(() => settledResult, reportError)
+                                : settledResult;
+                        };
+                        return isThenable(result)
+                            ? Promise.resolve(result).then(runAfter, reportError)
+                            : runAfter(result);
+                    };
+                    let beforeResult: unknown;
+                    try {
+                        beforeResult = before?.call(this, luaName, args);
+                    } catch (failure) {
+                        return reportError(failure);
+                    }
+                    return isThenable(beforeResult)
+                        ? Promise.resolve(beforeResult).then(runBinding, reportError)
+                        : runBinding();
+                }
+                : bound;
+            resolved.push({ role: method.role, luaName, bound: invoke });
+        }
 
-            if (opts.hooks) {
-                const { before, after } = opts.hooks;
-                const wrapped = (...args: unknown[]): unknown => {
-                    before?.apply(this, args);
-                    const result = bound(...args);
-                    after?.apply(this, args);
-                    return result;
-                };
-                if (targetName) {
-                    luaClass.method(luaName, wrapped);
-                } else {
-                    lua.global.set(luaName, wrapped);
-                }
-            } else {
-                if (targetName) {
-                    luaClass.method(luaName, bound);
-                } else {
-                    lua.global.set(luaName, bound);
-                }
+        const callHandlers = resolved.filter((method) => method.role === 'call');
+        const indexHandlers = resolved.filter((method) => method.role === 'index');
+        const newIndexHandlers = resolved.filter((method) => method.role === 'newIndex');
+        for (
+            const [role, handlers] of [['call', callHandlers], [
+                'index',
+                indexHandlers,
+            ], ['newIndex', newIndexHandlers]] as const
+        ) {
+            if (handlers.length > 1) {
+                throw new Error(
+                    `Only one @Lua${role} handler may be registered per binding`,
+                );
+            }
+        }
+
+        // Retain the old __call-name convention for compatibility while
+        // directing new bindings toward @LuaCall.
+        const legacyCall = opts.callable
+            ? resolved.find((method) => method.role === 'method' && method.luaName === '__call')
+            : undefined;
+        const callHandler = callHandlers[0] ?? legacyCall;
+
+        if (targetName && opts.callable && !callHandler) {
+            throw new Error(
+                `@LuaBinder on '${this.constructor.name || 'anonymous class'}' enables 'callable' but has no call handler. Add a static @LuaCall method.`,
+            );
+        }
+
+        for (const method of resolved) {
+            if (method.role === 'method') {
+                if (targetName) luaClass.method(method.luaName, method.bound);
+                else lua.global.set(method.luaName, method.bound);
+            }
+        }
+
+        if (targetName) {
+            if (callHandler) {
+                luaClass.call((...args) => callHandler.bound(...args));
+            }
+            if (indexHandlers[0]) {
+                luaClass.index((_self, key) => indexHandlers[0].bound(key));
+            }
+            if (newIndexHandlers[0]) {
+                luaClass.newIndex((_self, key, value) => newIndexHandlers[0].bound(key, value));
             }
         }
 
@@ -276,4 +488,3 @@ export class LuaBindings {
         }
     }
 }
-

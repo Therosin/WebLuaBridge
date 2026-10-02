@@ -17,6 +17,8 @@
  * along with WebLuaBridge.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+import type { LuaBridge } from './bridge.ts';
+
 /** Tuple-like payload map used for typed bridge events. */
 export type LuaBridgeEventMap = Record<string, unknown[]>;
 
@@ -223,11 +225,11 @@ export interface LuaEngineLike {
 
 /**
  * Context passed to binding factories during LuaBridge initialization.
- * Provides access to the bridge instance for event registration, globals, etc.
+ * Provides access to the full bridge instance.
  */
 export interface BindingContext {
     /** The bridge instance that is being initialized. */
-    bridge: LuaBridgeEventApi;
+    bridge: LuaBridge;
 }
 
 /** Binding factory type for installing Lua bindings. */

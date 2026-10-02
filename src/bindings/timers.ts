@@ -38,6 +38,13 @@
  * timers.clearAll()
  * print(timers.activeCount())  --> 0
  * ```
+ * Wrap callbacks with `async()` when they need to await a Promise:
+ * ```lua
+ * timers.setTimeout(async(function()
+ *     local result = fetchValue():await()
+ *     print(result)
+ * end), 1000)
+ * ```
  *
  * Errors in timer callbacks are caught and emitted as `timer:error` events
  * on the bridge's Event API. JS code can listen:
@@ -55,7 +62,7 @@
  * - `activeCount()` returns the number of currently tracked timers.
  */
 
-import { LuaBindings, LuaBinder, LuaBinding } from '../lua/bindings.ts';
+import { LuaBinder, LuaBinding, LuaBindings } from '../lua/bindings.ts';
 import type { BindingContext } from '../lua/types.ts';
 
 type JsTimerId = ReturnType<typeof setTimeout>;
@@ -82,7 +89,10 @@ export class TimerBindings extends LuaBindings {
      * ```
      */
     @LuaBinding({ name: 'setTimeout' })
-    static setTimeout(callback: (...args: unknown[]) => unknown, delay: number): number {
+    static setTimeout(
+        callback: (...args: unknown[]) => unknown,
+        delay: number,
+    ): number {
         if (typeof callback !== 'function') {
             throw new Error('setTimeout: first argument must be a function');
         }
@@ -90,7 +100,10 @@ export class TimerBindings extends LuaBindings {
         const id = inst.nextId++;
         const jsId = globalThis.setTimeout(() => {
             try {
-                callback();
+                const result = callback();
+                if (result && typeof (result as PromiseLike<unknown>).then === 'function') {
+                    void Promise.resolve(result).catch((err) => inst.handleError(err));
+                }
             } catch (err) {
                 inst.handleError(err);
             } finally {
@@ -111,7 +124,10 @@ export class TimerBindings extends LuaBindings {
      * ```
      */
     @LuaBinding({ name: 'setInterval' })
-    static setInterval(callback: (...args: unknown[]) => unknown, interval: number): number {
+    static setInterval(
+        callback: (...args: unknown[]) => unknown,
+        interval: number,
+    ): number {
         if (typeof callback !== 'function') {
             throw new Error('setInterval: first argument must be a function');
         }
@@ -119,7 +135,15 @@ export class TimerBindings extends LuaBindings {
         const id = inst.nextId++;
         const jsId = globalThis.setInterval(() => {
             try {
-                callback();
+                const result = callback();
+                if (result && typeof (result as PromiseLike<unknown>).then === 'function') {
+                    void Promise.resolve(result).catch((err) => {
+                        inst.handleError(err);
+                        // Stop on error to avoid repeated error loops
+                        globalThis.clearInterval(jsId);
+                        inst.active.delete(id);
+                    });
+                }
             } catch (err) {
                 inst.handleError(err);
                 // Stop on error to avoid repeated error loops

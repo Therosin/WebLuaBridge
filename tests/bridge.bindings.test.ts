@@ -17,15 +17,19 @@
  * along with WebLuaBridge.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { assertEquals, assert, assertRejects } from '@std/assert';
+import { assertEquals, assert, assertRejects, assertThrows } from '@std/assert';
 import {
     createLuaBridge,
     globalBindings,
     jsonBindings,
+    LuaCall,
     LuaBinder,
     LuaBinding,
     LuaBindings,
     LuaClass,
+    LuaIndex,
+    LuaNewIndex,
+    bindingDocs,
     regexBindings,
     timersBindings,
 } from '../mod.ts';
@@ -107,6 +111,49 @@ Deno.test('LuaClass: setGlobal auto-installs LuaClass', async () => {
 
         const result = await bridge.execute('return AutoLib.ping()');
         assertEquals(result, 'pong');
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('LuaClass: explicit call handler and readonly custom index coexist', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        const cls = new LuaClass({ name: 'Computed' })
+            .call((value: number) => value + 1)
+            .index((_self, key) => key === 'answer' ? 42 : undefined)
+            .readonly();
+        bridge.setGlobal('Computed', cls);
+        assertEquals(
+            await bridge.execute('return Computed(41), Computed.answer'),
+            [42, 42],
+        );
+        await assertRejects(
+            () => bridge.execute('Computed.extra = true'),
+            Error,
+            'read-only table',
+        );
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('LuaClass: callable tables require a call handler only when callable', async () => {
+    const bridge = await createLuaBridge();
+    try {
+        assertThrows(
+            () => bridge.setGlobal(
+                'MissingCallHandler',
+                new LuaClass({ name: 'MissingCallHandler' }).callable(),
+            ),
+            Error,
+            'has no call handler',
+        );
+        bridge.setGlobal(
+            'NotCallable',
+            new LuaClass({ name: 'NotCallable' }).callable(false),
+        );
+        assertEquals(await bridge.execute('return type(NotCallable)'), 'table');
     } finally {
         bridge.close();
     }
@@ -764,6 +811,249 @@ Deno.test('bindings: supports TC39 stage-3 method decorators', async () => {
     });
     try {
         assertEquals(await bridge.execute('return tc39.inc(41)'), 42);
+    } finally {
+        bridge.close();
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Binding metadata, Lua-specific roles, async lifecycle, and runtime recovery
+// ---------------------------------------------------------------------------
+
+const reviewedHookTrace: unknown[][] = [];
+
+@LuaBinder({
+    namespace: 'reviewed_hooks',
+    hooks: {
+        before: (methodName, args) => {
+            reviewedHookTrace.push(['before', methodName, args]);
+        },
+        after: (methodName, args, result) => {
+            reviewedHookTrace.push(['after', methodName, args, result]);
+        },
+        error: (methodName, args, error) => {
+            reviewedHookTrace.push(['error', methodName, args, (error as Error).message]);
+        },
+    },
+})
+class ReviewedHooks extends LuaBindings {
+    private readonly cachedBridge: BindingContext['bridge'];
+
+    constructor(ctx: BindingContext) {
+        super(ctx);
+        this.cachedBridge = ctx.bridge;
+    }
+
+    @LuaBinding({
+        name: 'async_value',
+        isAsync: true,
+        args: [{ name: 'value', type: 'number' }],
+        returnType: 'number',
+    })
+    static async asyncValue(value: number): Promise<number> {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return value + 1;
+    }
+
+    @LuaBinding({ name: 'failure' })
+    static async failure(): Promise<never> {
+        await Promise.resolve();
+        throw new Error('expected failure');
+    }
+
+    @LuaBinding({ name: 'reenter' })
+    static async reenter(): Promise<number> {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        const bridge = (this as unknown as ReviewedHooks).ctx.bridge;
+        return await bridge.execute<number>('return 40 + 2');
+    }
+
+    @LuaBinding({ name: 'same_bridge' })
+    static sameBridge(): boolean {
+        const self = this as unknown as ReviewedHooks;
+        return self.ctx.bridge === self.cachedBridge;
+    }
+}
+
+@LuaBinder({ namespace: 'reviewed_roles' })
+class ReviewedRoles extends LuaBindings {
+    static jsConstructionCount = 0;
+    private readonly values = new Map<string, unknown>();
+
+    constructor(ctx: BindingContext) {
+        super(ctx);
+        ReviewedRoles.jsConstructionCount++;
+    }
+
+    @LuaCall({
+        description: 'Create a Lua-facing value',
+        args: [{ name: 'value', type: 'string' }],
+        returnType: 'string',
+    })
+    static create(value: string): string {
+        return `created:${value}`;
+    }
+
+    @LuaIndex()
+    static readMissing(key: string): unknown {
+        return (this as unknown as ReviewedRoles).values.get(key);
+    }
+
+    @LuaNewIndex()
+    static writeMissing(key: string, value: unknown): void {
+        (this as unknown as ReviewedRoles).values.set(key, value);
+    }
+
+    @LuaBinding({ name: 'ping' })
+    static ping(): string {
+        return 'pong';
+    }
+}
+
+@LuaBinder({ namespace: 'missing_call_handler', callable: true })
+class MissingCallHandlerBinding extends LuaBindings {
+    @LuaBinding()
+    static ping(): string {
+        return 'pong';
+    }
+}
+
+Deno.test('bindingDocs exposes exporter-neutral decorator metadata', () => {
+    const docs = bindingDocs(ReviewedHooks);
+    assertEquals(docs.namespace, 'reviewed_hooks');
+    assertEquals(docs.methods[0], {
+        name: 'async_value',
+        sourceName: 'asyncValue',
+        role: 'method',
+        args: [{ name: 'value', type: 'number' }],
+        returnType: 'number',
+        isAsync: true,
+    });
+});
+
+Deno.test('Lua-specific binding roles create callable and computed namespace behavior', async () => {
+    ReviewedRoles.jsConstructionCount = 0;
+    const bridge = await createLuaBridge({}, {
+        bindings: [(ctx: BindingContext) => new ReviewedRoles(ctx)],
+    });
+    try {
+        assertEquals(ReviewedRoles.jsConstructionCount, 1);
+        assertEquals(bindingDocs(ReviewedRoles).callable, true);
+        assertEquals(
+            bindingDocs(ReviewedRoles).methods.map((method) => method.role),
+            ['call', 'index', 'newIndex', 'method'],
+        );
+        assertEquals(
+            await bridge.execute("reviewed_roles.answer = 42; return reviewed_roles('item'), reviewed_roles.answer, reviewed_roles.ping()"),
+            ['created:item', 42, 'pong'],
+        );
+        assertEquals(ReviewedRoles.jsConstructionCount, 1);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('callable LuaBinder requires a LuaCall handler', async () => {
+    await assertRejects(
+        () => createLuaBridge({}, {
+            bindings: [(ctx: BindingContext) => new MissingCallHandlerBinding(ctx)],
+        }),
+        Error,
+        'has no call handler',
+    );
+});
+
+Deno.test('binding hooks receive method context, settled results, and async failures', async () => {
+    reviewedHookTrace.length = 0;
+    const bridge = await createLuaBridge({}, {
+        bindings: [(ctx: BindingContext) => new ReviewedHooks(ctx)],
+    });
+    try {
+        assertEquals(await bridge.execute('return reviewed_hooks.async_value(41)'), 42);
+        assertEquals(reviewedHookTrace.slice(0, 2), [
+            ['before', 'async_value', [41]],
+            ['after', 'async_value', [41], 42],
+        ]);
+        await assertRejects(
+            () => bridge.execute('return reviewed_hooks.failure()'),
+            Error,
+            'expected failure',
+        );
+        assertEquals(reviewedHookTrace.slice(-2), [
+            ['before', 'failure', []],
+            ['error', 'failure', [], 'expected failure'],
+        ]);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('binding context keeps the stable bridge and withExecutionLock supports nested work', async () => {
+    const bridge = await createLuaBridge({}, {
+        bindings: [(ctx: BindingContext) => new ReviewedHooks(ctx)],
+    });
+    try {
+        assertEquals(await bridge.execute('return reviewed_hooks.same_bridge()'), true);
+        assertEquals(
+            await bridge.withExecutionLock(() => bridge.execute<number>('return 6 * 7')),
+            42,
+        );
+
+        const nested = bridge.execute<number>('return reviewed_hooks.reenter()');
+        assertEquals(await nested, 42);
+
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => release = resolve);
+        const lockOrder: string[] = [];
+        const first = bridge.withExecutionLock(async () => {
+            lockOrder.push('first-start');
+            await gate;
+            lockOrder.push('first-end');
+        });
+        const second = bridge.withExecutionLock(() => Promise.resolve().then(() => lockOrder.push('second')));
+        await Promise.resolve();
+        assertEquals(lockOrder, ['first-start']);
+        release();
+        await Promise.all([first, second]);
+        assertEquals(lockOrder, ['first-start', 'first-end', 'second']);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('async is installed as a built-in Lua callback trampoline', async () => {
+    const bridge = await createLuaBridge({
+        waitValue: () => new Promise<number>((resolve) => setTimeout(() => resolve(41), 5)),
+    });
+    try {
+        assertEquals(await bridge.execute(`
+            return async(function(first, middle, last)
+                return first + last
+            end)(20, nil, 22):await()
+        `), 42);
+        assertEquals(await bridge.execute(`
+            return async(function()
+                return waitValue():await() + 1
+            end)():await()
+        `), 42);
+    } finally {
+        bridge.close();
+    }
+});
+
+Deno.test('async timer callback can await while its originating Lua execution is suspended', async () => {
+    const bridge = await createLuaBridge({
+        waitValue: () => new Promise<number>((resolve) => setTimeout(() => resolve(41), 5)),
+    }, { bindings: [timersBindings] });
+    try {
+        assertEquals(await bridge.execute(`
+            local completion = Promise.create(function(resolve)
+                timers.setTimeout(async(function()
+                    resolve(waitValue():await() + 1)
+                end), 0)
+            end)
+            return completion:await()
+        `), 42);
     } finally {
         bridge.close();
     }

@@ -8,6 +8,8 @@ sidebar_position: 4
 
 WebLuaBridge bundles a Lua utility library in `common.lua`. Load it into your bridge to use these helpers from Lua.
 
+The `async(callback)` callback trampoline is a built-in global and is available without loading `common.lua`.
+
 ---
 
 ## Loading

@@ -53,8 +53,8 @@ Passed to the `@LuaBinder` decorator.
 |---|---|---|---|
 | `namespace` | `string` | — | Lua namespace table (omit to put methods in `_G`) |
 | `readonly` | `boolean` | `false` | Reject writes to the namespace table (requires `namespace`; throws if set without one) |
-| `callable` | `boolean` | `false` | Make the namespace callable via `__call` |
-| `hooks` | `{ before?, after? }` | — | Lifecycle hooks called before/after every binding method |
+| `callable` | `boolean` | `false` | Make the namespace callable through an explicit `@LuaCall` handler |
+| `hooks` | `{ before?, after?, error? }` | — | Hooks receive method name and argument array; `after` also receives the settled result, and `error` receives failures |
 
 ---
 
@@ -65,10 +65,13 @@ Passed to the `@LuaBinding` decorator.
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `name` | `string` | JS method name | Name exposed to Lua |
-| `args` | `Array<{name, type}>` | — | Argument descriptors (documentation only) |
-| `returnType` | `unknown` | — | Return type descriptor (documentation only) |
-| `isMethod` | `boolean` | `false` | First argument is `self` (Lua `:` syntax) |
-| `isAsync` | `boolean` | `false` | Binding returns a Promise |
+| `description` | `string` | — | Description for generated documentation |
+| `args` | `Array<{name, type}>` | — | Argument metadata for documentation exporters |
+| `returnType` | `unknown` | — | Return metadata for documentation exporters |
+| `isMethod` | `boolean` | `false` | Documentation metadata for Lua `:` call style |
+| `isAsync` | `boolean` | `false` | Documentation metadata indicating the implementation returns a Promise |
+
+`LuaCall`, `LuaIndex`, and `LuaNewIndex` mark static methods as callable-table, missing-read, and write handlers. `bindingDocs(SomeBindings)` exposes the collected structured metadata for documentation generators.
 
 ---
 
