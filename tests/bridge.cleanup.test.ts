@@ -4,8 +4,8 @@
  * Verifies that timers, the main loop, and other resources are
  * properly cleaned up when the bridge is closed.
  */
-import { assertEquals, assert } from '@std/assert';
-import { createLuaBridge, BridgeError } from '../mod.ts';
+import { assert, assertEquals } from '@std/assert';
+import { BridgeError, createLuaBridge } from '../mod.ts';
 import { TimerBindings } from '../src/bindings/timers.ts';
 import type { BindingContext } from '../src/lua/types.ts';
 
@@ -17,10 +17,13 @@ const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 Deno.test('cleanup: main loop stops when close() is called', async () => {
     const bridge = await createLuaBridge();
-    await bridge.mountFile('init.lua', `
+    await bridge.mountFile(
+        'init.lua',
+        `
         function OnInit() end
         function Update(dt) end
-    `);
+    `,
+    );
     await bridge.start({ intervalMs: 10 });
     assert(bridge.isMainLoopActive(), 'loop should be active');
 

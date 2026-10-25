@@ -82,8 +82,13 @@ deno task build    # check + bundle
 ```
 
 Vendor bundles are output to `dist/`:
+
 - `dist/webluabridge.bundle.js`
 - `dist/webluabridge.bundle.min.js`
+
+Pushes to `main` publish the stable `main-latest` release; pushes to `develop`
+publish the `testing-latest` prerelease. Both include the ESM bundles and their
+source maps.
 
 ---
 

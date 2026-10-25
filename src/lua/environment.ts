@@ -31,7 +31,7 @@
  */
 
 import { BridgeError, ErrorCodes } from './errors.ts';
-import { toLuaLongString, toBridgeError, isObject } from './utils.ts';
+import { isObject, toBridgeError, toLuaLongString } from './utils.ts';
 import type { LuaEngine, LuaExecutionContext } from './types.ts';
 
 // ---------------------------------------------------------------------------
@@ -170,8 +170,7 @@ return __chunk(...)
 
                 // ── Environment introspection & manipulation ──
 
-                Get: <T = unknown>(key: string): T =>
-                    (env as Record<string, unknown>)[key] as T,
+                Get: <T = unknown>(key: string): T => (env as Record<string, unknown>)[key] as T,
                 Set: (key: string, value: unknown): void => {
                     (env as Record<string, unknown>)[key] = value;
                 },

@@ -8,6 +8,12 @@
     "@std/path": "jsr:@std/path@^1.0.0",
     "esbuild": "npm:esbuild@0.27.3"
   },
+  "fmt": {
+    "lineWidth": 120,
+    "singleQuote": true,
+    "proseWrap": "preserve",
+    "exclude": ["**/*.md", "dist"]
+  },
   "compilerOptions": {
     "strict": true,
     "noImplicitAny": true,

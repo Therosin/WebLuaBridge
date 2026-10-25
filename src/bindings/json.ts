@@ -33,7 +33,7 @@
  * Errors (circular references, malformed JSON) propagate as Lua errors.
  */
 
-import { LuaBindings, LuaBinder, LuaBinding } from '../lua/bindings.ts';
+import { LuaBinder, LuaBinding, LuaBindings } from '../lua/bindings.ts';
 import type { BindingContext } from '../lua/types.ts';
 
 @LuaBinder({ namespace: 'json', readonly: true })

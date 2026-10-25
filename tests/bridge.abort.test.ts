@@ -2,7 +2,7 @@
  * Tests for AbortSignal integration with bridge execution.
  */
 import { assertEquals, assertRejects } from '@std/assert';
-import { createLuaBridge, BridgeError, ErrorCodes } from '../mod.ts';
+import { BridgeError, createLuaBridge, ErrorCodes } from '../mod.ts';
 
 Deno.test('abort: withExecutionLock rejects CANCELLED when signal already aborted', async () => {
     const bridge = await createLuaBridge();

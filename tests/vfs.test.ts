@@ -4,7 +4,7 @@
  * Tests VfsRegistry independently with a mock factory, then
  * integration-test with actual Wasmoon factory.
  */
-import { assertEquals, assert } from '@std/assert';
+import { assert, assertEquals } from '@std/assert';
 import { LuaFactory } from 'wasmoon';
 import { VfsRegistry } from '../src/lua/vfs.ts';
 

@@ -4,9 +4,9 @@
  * Tests the service contract: forwarding of Lua engine operations,
  * error wrapping, print state management.
  */
-import { assertEquals, assert, assertStringIncludes } from '@std/assert';
+import { assert, assertEquals, assertStringIncludes } from '@std/assert';
 import { LuaFactory } from 'wasmoon';
-import { ExecutionService, type ExecutionDeps } from '../src/lua/execution.ts';
+import { type ExecutionDeps, ExecutionService } from '../src/lua/execution.ts';
 import { BridgeError, ErrorCodes } from '../src/lua/errors.ts';
 import type { LuaEngine } from '../src/lua/types.ts';
 

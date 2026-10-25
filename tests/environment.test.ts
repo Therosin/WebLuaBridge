@@ -1,7 +1,7 @@
 /**
  * Tests for EnvironmentService — scoped Lua execution contexts.
  */
-import { assertEquals, assert, assertRejects } from '@std/assert';
+import { assert, assertEquals, assertRejects } from '@std/assert';
 import { BridgeError } from '../src/lua/errors.ts';
 import { LuaFactory } from 'wasmoon';
 import { EnvironmentService } from '../src/lua/environment.ts';

@@ -17,19 +17,19 @@
  * along with WebLuaBridge.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { assertEquals, assert, assertRejects, assertThrows } from '@std/assert';
+import { assert, assertEquals, assertRejects, assertThrows } from '@std/assert';
 import {
+    bindingDocs,
     createLuaBridge,
     globalBindings,
     jsonBindings,
-    LuaCall,
     LuaBinder,
     LuaBinding,
     LuaBindings,
+    LuaCall,
     LuaClass,
     LuaIndex,
     LuaNewIndex,
-    bindingDocs,
     regexBindings,
     timersBindings,
 } from '../mod.ts';
@@ -142,10 +142,11 @@ Deno.test('LuaClass: callable tables require a call handler only when callable',
     const bridge = await createLuaBridge();
     try {
         assertThrows(
-            () => bridge.setGlobal(
-                'MissingCallHandler',
-                new LuaClass({ name: 'MissingCallHandler' }).callable(),
-            ),
+            () =>
+                bridge.setGlobal(
+                    'MissingCallHandler',
+                    new LuaClass({ name: 'MissingCallHandler' }).callable(),
+                ),
             Error,
             'has no call handler',
         );
@@ -531,8 +532,13 @@ class TimerTestBindings extends LuaBindings {
         const inst = this as unknown as TimerTestBindings;
         const id = inst.nextId++;
         const jsId = globalThis.setTimeout(() => {
-            try { callback(); } catch { /* test hook */ }
-            finally { inst.active.delete(id); }
+            try {
+                callback();
+            } catch {
+                /* test hook */
+            } finally {
+                inst.active.delete(id);
+            }
         }, delay);
         inst.active.set(id, { type: 'timeout', jsId });
         return id;
@@ -543,7 +549,9 @@ class TimerTestBindings extends LuaBindings {
         const inst = this as unknown as TimerTestBindings;
         const id = inst.nextId++;
         const jsId = globalThis.setInterval(() => {
-            try { callback(); } catch {
+            try {
+                callback();
+            } catch {
                 globalThis.clearInterval(jsId);
                 inst.active.delete(id);
             }
@@ -743,7 +751,12 @@ Deno.test('bindings: readonly namespaces reject overwriting an existing key', as
 // ---------------------------------------------------------------------------
 
 const fakeEngine = {
-    global: { set() {}, get() { return undefined; } },
+    global: {
+        set() {},
+        get() {
+            return undefined;
+        },
+    },
     doString: () => Promise.resolve(undefined),
     doStringSync: () => undefined,
 } as unknown as LuaEngineLike;
@@ -944,7 +957,9 @@ Deno.test('Lua-specific binding roles create callable and computed namespace beh
             ['call', 'index', 'newIndex', 'method'],
         );
         assertEquals(
-            await bridge.execute("reviewed_roles.answer = 42; return reviewed_roles('item'), reviewed_roles.answer, reviewed_roles.ping()"),
+            await bridge.execute(
+                "reviewed_roles.answer = 42; return reviewed_roles('item'), reviewed_roles.answer, reviewed_roles.ping()",
+            ),
             ['created:item', 42, 'pong'],
         );
         assertEquals(ReviewedRoles.jsConstructionCount, 1);
@@ -955,9 +970,10 @@ Deno.test('Lua-specific binding roles create callable and computed namespace beh
 
 Deno.test('callable LuaBinder requires a LuaCall handler', async () => {
     await assertRejects(
-        () => createLuaBridge({}, {
-            bindings: [(ctx: BindingContext) => new MissingCallHandlerBinding(ctx)],
-        }),
+        () =>
+            createLuaBridge({}, {
+                bindings: [(ctx: BindingContext) => new MissingCallHandlerBinding(ctx)],
+            }),
         Error,
         'has no call handler',
     );
@@ -1026,16 +1042,22 @@ Deno.test('async is installed as a built-in Lua callback trampoline', async () =
         waitValue: () => new Promise<number>((resolve) => setTimeout(() => resolve(41), 5)),
     });
     try {
-        assertEquals(await bridge.execute(`
+        assertEquals(
+            await bridge.execute(`
             return async(function(first, middle, last)
                 return first + last
             end)(20, nil, 22):await()
-        `), 42);
-        assertEquals(await bridge.execute(`
+        `),
+            42,
+        );
+        assertEquals(
+            await bridge.execute(`
             return async(function()
                 return waitValue():await() + 1
             end)():await()
-        `), 42);
+        `),
+            42,
+        );
     } finally {
         bridge.close();
     }
@@ -1046,14 +1068,17 @@ Deno.test('async timer callback can await while its originating Lua execution is
         waitValue: () => new Promise<number>((resolve) => setTimeout(() => resolve(41), 5)),
     }, { bindings: [timersBindings] });
     try {
-        assertEquals(await bridge.execute(`
+        assertEquals(
+            await bridge.execute(`
             local completion = Promise.create(function(resolve)
                 timers.setTimeout(async(function()
                     resolve(waitValue():await() + 1)
                 end), 0)
             end)
             return completion:await()
-        `), 42);
+        `),
+            42,
+        );
     } finally {
         bridge.close();
     }
