@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 permissions:
   contents: read
@@ -28,6 +28,9 @@ jobs:
         uses: denoland/setup-deno@v2
         with:
           deno-version: ${{ matrix.deno-version }}
+
+      - name: Install dependencies
+        run: deno install --frozen
 
       - name: Format check
         run: deno fmt --check

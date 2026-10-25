@@ -103,6 +103,9 @@ The project uses GitHub Actions:
 
 - **CI** (`.github/workflows/ci.yml`): Runs on push/PR — type checks + tests on Deno v2
 - **Release** (`.github/workflows/release-assets.yml`): On release — validates, builds, and uploads browser bundles to the GitHub release
+- **Release channels** (`.github/workflows/release-channels.yml`): On push to
+  `main` or `develop` — validates, builds the Node ESM bundles, and
+  creates/updates the matching rolling release
 
 ## Building the browser bundle
 
@@ -118,5 +121,26 @@ deno task bundle  # bundle only
 ```
 
 Outputs:
+
 - `dist/webluabridge.bundle.js`
 - `dist/webluabridge.bundle.min.js`
+- `dist/webluabridge.bundle.js.map`
+- `dist/webluabridge.bundle.min.js.map`
+
+## Release channels
+
+Pushing to a long-lived branch publishes a rolling GitHub release:
+
+| Branch    | Tag              | Release                  | Kind       |
+| --------- | ---------------- | ------------------------ | ---------- |
+| `main`    | `main-latest`    | `WebLuaBridge (main)`    | Stable     |
+| `develop` | `testing-latest` | `WebLuaBridge (testing)` | Prerelease |
+
+Each release is built from scratch (`deno task build`), which type-checks, runs
+the test suite, bundles, and runs the Node ESM smoke test. The unminified
+bundle, minified bundle, and their source maps are attached to the release. The
+rolling tag is moved to the commit that produced the assets, so the release
+always reflects the current branch head.
+
+Releases are only published from `main` and `develop`; manually running the
+workflow on any other branch fails before building.

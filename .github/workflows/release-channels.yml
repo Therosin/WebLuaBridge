@@ -1,0 +1,121 @@
+name: Release Channels
+
+on:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: deno install --frozen
+
+      - name: Resolve release channel
+        id: channel
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "${{ github.ref_name }}" in
+            main)
+              echo "tag=main-latest" >> "$GITHUB_OUTPUT"
+              echo "title=WebLuaBridge (main)" >> "$GITHUB_OUTPUT"
+              echo "branch=main" >> "$GITHUB_OUTPUT"
+              echo "prerelease=false" >> "$GITHUB_OUTPUT"
+              ;;
+            develop)
+              echo "tag=testing-latest" >> "$GITHUB_OUTPUT"
+              echo "title=WebLuaBridge (testing)" >> "$GITHUB_OUTPUT"
+              echo "branch=develop" >> "$GITHUB_OUTPUT"
+              echo "prerelease=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Release channels are only published from main or develop"
+              exit 1
+              ;;
+          esac
+
+      - name: Build Node ESM bundle
+        run: deno task build
+
+      - name: Prepare release notes
+        env:
+          BRANCH: ${{ steps.channel.outputs.branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          {
+            echo "Automated build from \`${BRANCH}\` at \`${GITHUB_SHA}\`."
+            echo
+            echo "### Assets"
+            echo
+            echo "- \`webluabridge.bundle.js\` — ESM bundle with the Lua WASM runtime inlined"
+            echo "- \`webluabridge.bundle.min.js\` — minified ESM bundle with the Lua WASM runtime inlined"
+            echo "- \`webluabridge.bundle.js.map\` — source map for the unminified bundle"
+            echo "- \`webluabridge.bundle.min.js.map\` — source map for the minified bundle"
+            echo
+            echo "Both bundles are ESM and run in Node.js 18+ and modern browsers."
+          } > release-notes.md
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.channel.outputs.tag }}
+          TITLE: ${{ steps.channel.outputs.title }}
+          PRERELEASE: ${{ steps.channel.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          assets=(
+            dist/webluabridge.bundle.js
+            dist/webluabridge.bundle.min.js
+            dist/webluabridge.bundle.js.map
+            dist/webluabridge.bundle.min.js.map
+          )
+
+          # The channel tags are rolling: they always point at the commit that
+          # produced the assets attached to the release.
+          git tag -f "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG" --force
+
+          edit_flags=(--title "$TITLE" --notes-file release-notes.md --prerelease="$PRERELEASE")
+          create_flags=(--title "$TITLE" --notes-file release-notes.md)
+          if [[ "$PRERELEASE" == "true" ]]; then
+            edit_flags+=(--latest=false)
+            create_flags+=(--prerelease --latest=false)
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Updating release $TAG"
+            gh release upload "$TAG" "${assets[@]}" --clobber
+            gh release edit "$TAG" "${edit_flags[@]}"
+          else
+            echo "Creating release $TAG"
+            gh release create "$TAG" "${assets[@]}" "${create_flags[@]}"
+          fi
