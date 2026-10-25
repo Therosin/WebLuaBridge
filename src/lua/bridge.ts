@@ -23,30 +23,30 @@
 import { LuaFactory } from 'npm:wasmoon@1.16.0';
 
 import type {
-    LuaEngine,
-    LuaBridgeOptions,
-    LuaRuntimeOptions,
-    RuntimeStartOptions,
-    LuaBridgeGlobals,
-    LuaExecutionContext,
-    LuaBridgeEventMap,
-    LuaBridgeEventApi,
-    EventHandler,
     BridgeEventsApi,
-    LuaBindingFactory,
     BridgeState,
+    EventHandler,
+    LuaBindingFactory,
+    LuaBridgeEventApi,
+    LuaBridgeEventMap,
+    LuaBridgeGlobals,
+    LuaBridgeOptions,
+    LuaEngine,
+    LuaExecutionContext,
+    LuaRuntimeOptions,
     RuntimeLoopState,
+    RuntimeStartOptions,
 } from './types.ts';
 import { BridgeEventBus } from './events.ts';
 import {
-    NOT_INITIALIZED_ERROR,
-    INIT_FILE,
     CALL_ON_INIT_CODE,
-    CALL_UPDATE_CODE,
     CALL_ON_SHUTDOWN_CODE,
-    toBridgeError,
-    normalizeRuntimeOptions,
+    CALL_UPDATE_CODE,
+    INIT_FILE,
     normalizeMainLoopInterval,
+    normalizeRuntimeOptions,
+    NOT_INITIALIZED_ERROR,
+    toBridgeError,
 } from './utils.ts';
 import { LuaBindings } from './bindings.ts';
 import { LuaClass } from './lua_class.ts';
@@ -330,9 +330,7 @@ export class LuaBridge<
             }
 
             const now = Date.now();
-            const dtMs = this.mainLoop.lastTickAt > 0
-                ? now - this.mainLoop.lastTickAt
-                : this.mainLoop.intervalMs;
+            const dtMs = this.mainLoop.lastTickAt > 0 ? now - this.mainLoop.lastTickAt : this.mainLoop.intervalMs;
             this.mainLoop.lastTickAt = now;
 
             if (this.mainLoop.runningTick) {

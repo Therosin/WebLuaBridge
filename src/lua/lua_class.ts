@@ -280,5 +280,4 @@ export class LuaClass {
 
         return config;
     }
-
 }

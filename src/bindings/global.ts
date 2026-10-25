@@ -32,7 +32,7 @@
  */
 
 import type { BindingContext } from '../lua/types.ts';
-import { LuaBindings, LuaBinder, LuaBinding } from '../lua/bindings.ts';
+import { LuaBinder, LuaBinding, LuaBindings } from '../lua/bindings.ts';
 
 @LuaBinder({})
 export class GlobalBindings extends LuaBindings {

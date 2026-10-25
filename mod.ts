@@ -16,11 +16,11 @@ export type {
 } from './src/lua/types.ts';
 export type {
     LuaBinderOptions,
+    LuaBindingClass,
     LuaBindingDocs,
     LuaBindingMethodDocs,
     LuaBindingOptions,
     LuaBindingRole,
-    LuaBindingClass,
 } from './src/lua/bindings.ts';
 
 export { createLuaBridge, LuaBindings, LuaClass, runLuaCode };

@@ -5,12 +5,11 @@
  * handle different failure modes programmatically without string-parsing.
  */
 import { assertEquals, assertRejects } from '@std/assert';
-import { createLuaBridge, runLuaCode, BridgeError, ErrorCodes } from '../mod.ts';
+import { BridgeError, createLuaBridge, ErrorCodes, runLuaCode } from '../mod.ts';
 
 // ---------------------------------------------------------------------------
 // Error code constants
 // ---------------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------------
 // BridgeError class tests

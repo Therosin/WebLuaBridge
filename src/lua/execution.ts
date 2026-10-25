@@ -31,12 +31,12 @@ import type { LuaEngine } from './types.ts';
 import { ErrorCodes } from './errors.ts';
 import { COMMON_LUA_SOURCE } from '../common_lua_content.ts';
 import {
-    toLuaLongString,
-    toBridgeError,
+    COMPAT_ARGS_GLOBAL,
     luaWrap,
+    toBridgeError,
+    toLuaLongString,
     unwrapTablePack,
     wrapForMultiReturn,
-    COMPAT_ARGS_GLOBAL,
 } from './utils.ts';
 import { LuaClass } from './lua_class.ts';
 

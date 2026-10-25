@@ -6,14 +6,14 @@
  * callers do not need to manage Wasmoon's internal stack themselves.
  */
 
-import type { LuaEngine } from "./types.ts";
+import type { LuaEngine } from './types.ts';
 
 /** Install a bridge-local workaround for Wasmoon return-value stack leaks. */
 export function guardWasmoonReturnStack(lua: LuaEngine): LuaEngine {
     const { global } = lua;
     if (
-        typeof global.getTop !== "function" ||
-        typeof global.setTop !== "function"
+        typeof global.getTop !== 'function' ||
+        typeof global.setTop !== 'function'
     ) {
         return lua;
     }
@@ -39,24 +39,19 @@ export function guardWasmoonReturnStack(lua: LuaEngine): LuaEngine {
     };
 
     const doString = lua.doString.bind(lua);
-    lua.doString = <T = unknown>(code: string): Promise<T> =>
-        withAsyncStackRestore(() => doString<T>(code));
+    lua.doString = <T = unknown>(code: string): Promise<T> => withAsyncStackRestore(() => doString<T>(code));
 
     const doFile = lua.doFile.bind(lua);
-    lua.doFile = <T = unknown>(file: string): Promise<T> =>
-        withAsyncStackRestore(() => doFile<T>(file));
+    lua.doFile = <T = unknown>(file: string): Promise<T> => withAsyncStackRestore(() => doFile<T>(file));
 
     const doStringSync = lua.doStringSync.bind(lua);
-    lua.doStringSync = <T = unknown>(code: string): T =>
-        withStackRestore(() => doStringSync<T>(code));
+    lua.doStringSync = <T = unknown>(code: string): T => withStackRestore(() => doStringSync<T>(code));
 
     const doFileSync = lua.doFileSync.bind(lua);
-    lua.doFileSync = <T = unknown>(file: string): T =>
-        withStackRestore(() => doFileSync<T>(file));
+    lua.doFileSync = <T = unknown>(file: string): T => withStackRestore(() => doFileSync<T>(file));
 
     const call = global.call.bind(global);
-    global.call = (...args: Parameters<typeof call>): ReturnType<typeof call> =>
-        withStackRestore(() => call(...args));
+    global.call = (...args: Parameters<typeof call>): ReturnType<typeof call> => withStackRestore(() => call(...args));
 
     return lua;
 }

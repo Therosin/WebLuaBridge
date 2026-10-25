@@ -392,8 +392,12 @@ export class LuaBindings {
                         }
                         if (isThenable(report)) {
                             return Promise.resolve(report).then(
-                                () => { throw failure; },
-                                () => { throw failure; },
+                                () => {
+                                    throw failure;
+                                },
+                                () => {
+                                    throw failure;
+                                },
                             );
                         }
                         throw failure;
@@ -459,7 +463,9 @@ export class LuaBindings {
 
         if (targetName && opts.callable && !callHandler) {
             throw new Error(
-                `@LuaBinder on '${this.constructor.name || 'anonymous class'}' enables 'callable' but has no call handler. Add a static @LuaCall method.`,
+                `@LuaBinder on '${
+                    this.constructor.name || 'anonymous class'
+                }' enables 'callable' but has no call handler. Add a static @LuaCall method.`,
             );
         }
 

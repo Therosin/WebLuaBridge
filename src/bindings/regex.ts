@@ -35,7 +35,7 @@
  * `string.find(str, pattern)` and JavaScript's `str.match(pattern)`.
  */
 
-import { LuaBindings, LuaBinder, LuaBinding } from '../lua/bindings.ts';
+import { LuaBinder, LuaBinding, LuaBindings } from '../lua/bindings.ts';
 import type { BindingContext } from '../lua/types.ts';
 
 @LuaBinder({ namespace: 'regex', readonly: true })

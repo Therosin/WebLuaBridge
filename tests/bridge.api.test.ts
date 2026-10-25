@@ -1,5 +1,5 @@
-import { assertEquals, assert, assertRejects, assertThrows } from '@std/assert';
-import { createLuaBridge, runLuaCode, BridgeError, LuaClass } from '../mod.ts';
+import { assert, assertEquals, assertRejects, assertThrows } from '@std/assert';
+import { BridgeError, createLuaBridge, LuaClass, runLuaCode } from '../mod.ts';
 
 Deno.test('api: call() invokes a Lua function and returns value', async () => {
     const bridge = await createLuaBridge();
