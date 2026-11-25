@@ -10,19 +10,42 @@
  *   const result = await bridge.execute('return 40 + 2');
  *   console.log(result); // 42
  */
-import LuaBridge, { createLuaBridge as _createLuaBridge, type runLuaCode as _runLuaCode } from '../src/lua/bridge.ts';
+import LuaBridge, { createLuaBridge as _createLuaBridge } from '../src/lua/bridge.ts';
 import type { LuaBridgeOptions } from '../src/lua/types.ts';
 import { WASM_URI } from './wasm_inline.ts';
 
 export type {
+    BindingContext,
     EventHandler,
+    LuaBindingFactory,
     LuaBridgeEventApi,
     LuaBridgeEventMap,
     LuaBridgeGlobals,
+    LuaBridgeOptions,
+    LuaEngineLike,
     LuaExecutionContext,
     LuaRuntimeOptions,
     RuntimeStartOptions,
 } from '../src/lua/types.ts';
+export type {
+    LuaBinderOptions,
+    LuaBindingClass,
+    LuaBindingDocs,
+    LuaBindingMethodDocs,
+    LuaBindingOptions,
+    LuaBindingRole,
+} from '../src/lua/bindings.ts';
+
+export { LuaBindings } from '../src/lua/bindings.ts';
+export { LuaClass } from '../src/lua/lua_class.ts';
+export { bindingDocs, LuaBinder, LuaBinding, LuaCall, LuaIndex, LuaNewIndex } from '../src/lua/bindings.ts';
+export { BridgeError, ErrorCodes } from '../src/lua/errors.ts';
+export type { ErrorCode } from '../src/lua/errors.ts';
+
+export { default as globalBindings, type GlobalBindings } from '../src/bindings/global.ts';
+export { default as jsonBindings, type JsonBindings } from '../src/bindings/json.ts';
+export { default as regexBindings, type RegexBindings } from '../src/bindings/regex.ts';
+export { default as timersBindings, type TimerBindings } from '../src/bindings/timers.ts';
 
 /**
  * Create a LuaBridge with the inlined WASM runtime.

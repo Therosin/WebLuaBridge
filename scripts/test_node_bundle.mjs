@@ -3,8 +3,34 @@ const bundles = [
     '../dist/webluabridge.bundle.min.js',
 ];
 
+const requiredExports = [
+    'default',
+    'LuaBridge',
+    'createLuaBridge',
+    'runLuaCode',
+    'LuaClass',
+    'LuaBindings',
+    'bindingDocs',
+    'LuaBinder',
+    'LuaBinding',
+    'LuaCall',
+    'LuaIndex',
+    'LuaNewIndex',
+    'BridgeError',
+    'ErrorCodes',
+    'globalBindings',
+    'jsonBindings',
+    'regexBindings',
+    'timersBindings',
+];
+
 for (const bundle of bundles) {
     const module = await import(bundle);
+    for (const name of requiredExports) {
+        if (module[name] === undefined) {
+            throw new Error(`${bundle} is missing export: ${name}`);
+        }
+    }
     const bridge = await module.createLuaBridge({ hostValue: 40 });
 
     try {
