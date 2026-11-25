@@ -1,0 +1,4 @@
+# Normalize text files to LF in the repository and in every working tree.
+# CI runs on Linux while development happens on Windows, so relying on
+# core.autocrlf produced CRLF blobs and broke `deno fmt --check` in CI.
+* text=auto eol=lf
