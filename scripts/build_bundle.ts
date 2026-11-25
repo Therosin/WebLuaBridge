@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-nocheck: Deno-only build script; avoids false positives under Bun/Node TypeScript language servers
 
 /**
  * Build script for the self-contained ESM bundle.
