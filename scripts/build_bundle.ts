@@ -117,10 +117,8 @@ async function findWasmoonWasm(): Promise<string> {
         // fall through
     }
 
-    throw new Error(
-        'Could not find wasmoon glue.wasm in Deno npm cache.\n' +
-        'Run `deno cache --reload wasmoon@1.16.0` first.',
-    );
+    const msg = 'Could not find wasmoon glue.wasm in Deno npm cache.\nRun `deno cache --reload wasmoon@1.16.0` first.';
+    throw new Error(msg);
 }
 
 async function base64EncodeFile(path: string): Promise<string> {
