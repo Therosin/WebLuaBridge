@@ -30,10 +30,7 @@
  * pending queue is cleared after mounting.
  */
 
-// reason: inline npm specifier keeps wasmoon resolvable by consumer bundlers
-// (esbuild) that do not inherit this repo's import map.
-// deno-lint-ignore no-import-prefix
-import type { LuaFactory } from 'npm:wasmoon@1.16.0';
+import type { LuaFactory } from 'wasmoon';
 
 export class VfsRegistry {
     /** Pending files to be mounted during next mountPending() call. */

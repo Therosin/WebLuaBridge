@@ -1796,6 +1796,11 @@
       "jsr:@std/path@1",
       "npm:esbuild@0.27.3",
       "npm:wasmoon@1.16.0"
-    ]
+    ],
+    "packageJson": {
+      "dependencies": [
+        "npm:wasmoon@1.16.0"
+      ]
+    }
   }
 }

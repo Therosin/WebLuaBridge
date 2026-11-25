@@ -14,10 +14,15 @@
   "type": "module",
   "exports": {
     ".": {
+      "types": "./mod.ts",
       "deno": "./mod.ts",
+      "bun": "./mod.ts",
       "import": "./dist/webluabridge.bundle.js",
       "default": "./dist/webluabridge.bundle.js"
     }
+  },
+  "dependencies": {
+    "wasmoon": "1.16.0"
   },
   "files": [
     "dist/",

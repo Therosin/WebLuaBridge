@@ -17,10 +17,7 @@
  * along with WebLuaBridge.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-// reason: inline npm specifier keeps wasmoon resolvable by consumer bundlers
-// (esbuild) that do not inherit this repo's import map.
-// deno-lint-ignore no-import-prefix
-import { LuaFactory } from 'npm:wasmoon@1.16.0';
+import { LuaFactory } from 'wasmoon';
 
 import type {
     BridgeEventsApi,
