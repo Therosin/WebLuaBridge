@@ -123,12 +123,6 @@ local __scope = setmetatable({}, {
                 if (apiId !== undefined && args.length > 0 && args[0] === apiId) {
                     return args.slice(1);
                 }
-                if (
-                    args.length > 1 && typeof args[0] !== 'string' &&
-                    typeof args[1] === 'string'
-                ) {
-                    return args.slice(1);
-                }
                 return args;
             };
 
@@ -211,13 +205,6 @@ return __chunk()
                     name: string,
                     ...args: unknown[]
                 ): Promise<T> => {
-                    // JS functions on the env object are not callable through the
-                    // scope metatable — call them directly from JS
-                    const resolved = (env as Record<string, unknown>)[name];
-                    if (typeof resolved === 'function') {
-                        return (resolved as (...args: unknown[]) => T)(...normalizeArgs(args));
-                    }
-
                     // Validate path against injection — only dot-delimited identifiers
                     const SAFE_PATH = /^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$/;
                     if (!SAFE_PATH.test(name)) {
@@ -227,8 +214,36 @@ return __chunk()
                         );
                     }
 
+                    // JS functions on the env object are not callable through the
+                    // scope metatable — resolve flat or dotted paths directly from JS first
+                    const parts = name.split('.');
+                    let cursor: unknown = env;
+                    let parent: unknown = env;
+                    for (const part of parts) {
+                        if (cursor === null || typeof cursor !== 'object') {
+                            cursor = undefined;
+                            break;
+                        }
+                        if (!Object.prototype.hasOwnProperty.call(cursor, part)) {
+                            cursor = undefined;
+                            break;
+                        }
+                        parent = cursor;
+                        cursor = (cursor as Record<string, unknown>)[part];
+                    }
+                    if (typeof cursor === 'function') {
+                        return (cursor as (...a: unknown[]) => T).apply(parent, normalizeArgs(args));
+                    }
+
                     const wrappedCode = `${scopeCodePrefix}
-local __fn = ${name}
+local __fn = __scope
+for __part in string.gmatch(${toLuaLongString(name)}, "[^%.]+") do
+    if type(__fn) ~= "table" then
+        __fn = nil
+        break
+    end
+    __fn = __fn[__part]
+end
 if type(__fn) ~= "function" then
     error("attempt to call a non-function value (" .. ${toLuaLongString(name)} .. ")", 0)
 end

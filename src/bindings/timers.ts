@@ -76,6 +76,7 @@ interface TimerEntry {
 export class TimerBindings extends LuaBindings {
     private nextId = 1;
     private active = new Map<number, TimerEntry>();
+    private closed = false;
 
     constructor(ctx: BindingContext) {
         super(ctx);
@@ -97,6 +98,9 @@ export class TimerBindings extends LuaBindings {
             throw new Error('setTimeout: first argument must be a function');
         }
         const inst = this as unknown as TimerBindings;
+        if (inst.closed) {
+            throw new Error('setTimeout: TimerBindings has been closed');
+        }
         const id = inst.nextId++;
         const jsId = globalThis.setTimeout(() => {
             try {
@@ -132,6 +136,9 @@ export class TimerBindings extends LuaBindings {
             throw new Error('setInterval: first argument must be a function');
         }
         const inst = this as unknown as TimerBindings;
+        if (inst.closed) {
+            throw new Error('setTimeout: TimerBindings has been closed');
+        }
         const id = inst.nextId++;
         const jsId = globalThis.setInterval(() => {
             try {
@@ -230,6 +237,7 @@ export class TimerBindings extends LuaBindings {
      * Ensures no dangling callbacks fire against a destroyed Lua state.
      */
     override close(): void {
+        this.closed = true;
         TimerBindings.clearAll.call(this);
     }
 

@@ -484,7 +484,17 @@ export class LuaBindings {
                 luaClass.index((_self, key) => indexHandlers[0].bound(key));
             }
             if (newIndexHandlers[0]) {
-                luaClass.newIndex((_self, key, value) => newIndexHandlers[0].bound(key, value));
+                luaClass.newIndex((_self, key, value) => {
+                    const result = newIndexHandlers[0].bound(key, value);
+                    if (
+                        result !== null &&
+                        (typeof result === 'object' || typeof result === 'function') &&
+                        typeof (result as PromiseLike<unknown>).then === 'function'
+                    ) {
+                        void Promise.resolve(result).catch(() => {});
+                        throw new Error('@LuaNewIndex handlers and hooks must be synchronous');
+                    }
+                });
             }
         }
 

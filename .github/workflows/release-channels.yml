@@ -99,13 +99,10 @@ jobs:
             dist/webluabridge.bundle.min.js.map
           )
 
-          # The channel tags are rolling: they always point at the commit that
-          # produced the assets attached to the release.
-          git tag -f "$TAG" "$GITHUB_SHA"
-          git push origin "refs/tags/$TAG" --force
-
+          # Upload/create release assets first, then move the rolling tag so the
+          # tag never points at a commit whose release assets failed to upload.
           edit_flags=(--title "$TITLE" --notes-file release-notes.md --prerelease="$PRERELEASE")
-          create_flags=(--title "$TITLE" --notes-file release-notes.md)
+          create_flags=(--title "$TITLE" --notes-file release-notes.md --target "$GITHUB_SHA")
           if [[ "$PRERELEASE" == "true" ]]; then
             edit_flags+=(--latest=false)
             create_flags+=(--prerelease --latest=false)
@@ -114,6 +111,8 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Updating release $TAG"
             gh release upload "$TAG" "${assets[@]}" --clobber
+            git tag -f "$TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$TAG" --force
             gh release edit "$TAG" "${edit_flags[@]}"
           else
             echo "Creating release $TAG"

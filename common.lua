@@ -1,4 +1,4 @@
-local unpack, select = unpack, select;
+local unpack, select = table.unpack or unpack, select;
 
 local function pack(...)
   return { n = select("#", ...), ... }
@@ -27,7 +27,7 @@ end
 --- @param path string dot-separated path to the function to detour (e.g. "math.sin" or "print")
 --- @param def {precb: function, postcb: function, catchErrors: boolean} table containing optional pre and post callbacks and error handling flag
 --- @return function restore method that can be called to restore the original function
-function Detour(path, def)
+local function Detour(path, def)
   local obj, funcname = ResolvePath(path)
 
   local original = obj[funcname]
@@ -124,7 +124,7 @@ end
 ---@param allowReset boolean if true, the returned function will have a reset method that allows it to be run again
 ---@return function wrapped function that can only be executed once, and optionally a reset method
 ---@return function? reset method if allowReset is true, nil otherwise
-function OnlyRunOnce(f, allowReset)
+local function OnlyRunOnce(f, allowReset)
     local hasRun = false
     return function(...)
         if not hasRun then
@@ -135,7 +135,7 @@ function OnlyRunOnce(f, allowReset)
 end
 
 
-function ReadOnly(t)
+local function ReadOnly(t)
   return setmetatable({}, {
     __index = t,
     __newindex = function(_, key)
@@ -145,25 +145,50 @@ function ReadOnly(t)
   })
 end
 
-function Class(name, static)
+local function Class(name, static)
     local class = {}
-
-    return setmetatable({}, {
+    local instanceMt = {
         __type = name or "Class",
-        __index = function(self, key)
+        __index = function(_, key)
+            local val = class[key]
+            if val ~= nil then
+                return val
+            end
             if static and static[key] ~= nil then
                 return static[key]
-            else
-                return class[key]
             end
+            return nil
         end,
         __newindex = function(self, key, value)
             if static and static[key] ~= nil then
-                error("Cannot modify static member: " .. key)
+                error("Cannot modify static member: " .. tostring(key))
             else
                 rawset(self, key, value)
             end
         end,
         __metatable = false
+    }
+
+    return setmetatable(class, {
+        __type = name or "Class",
+        __index = static,
+        __call = function(_, ...)
+            local instance = setmetatable({}, instanceMt)
+            if type(instance.init) == "function" then
+                instance:init(...)
+            end
+            return instance
+        end,
+        __metatable = false
     })
 end
+
+return {
+  Detour = Detour,
+  OnlyRunOnce = OnlyRunOnce,
+  ReadOnly = ReadOnly,
+  Class = Class,
+  ResolvePath = ResolvePath,
+  pack = pack,
+  unpackn = unpackn,
+}

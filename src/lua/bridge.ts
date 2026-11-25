@@ -17,6 +17,7 @@
  * along with WebLuaBridge.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { LuaFactory } from 'wasmoon';
 
 import type {
@@ -85,8 +86,14 @@ export class LuaBridge<
     private mainLoop: RuntimeLoopState;
     /** Promise chain used as an async mutex for runtime operations. */
     private executionQueue: Promise<unknown>;
-    /** Reentrancy guard — set while a lock-holder is actively executing. */
+    /** Reentrancy guard — true only while a lock-holder synchronously invokes `operation()`. */
     private inLock = false;
+    /** Async-context reentrancy tracker so only descendants of the lock-holder bypass the queue. */
+    private lockStorage = new AsyncLocalStorage<boolean>();
+    /** In-flight initialization promise shared across concurrent `init()` callers. */
+    private initPromise: Promise<void> | null = null;
+    /** In-flight startup promise shared across concurrent `start()` callers. */
+    private startPromise: Promise<void> | null = null;
     /** Monotonic counter used to generate unique `_G` temporary keys. */
     private argsKeyCounter: number;
     /** Binding factories to install during init(). */
@@ -189,8 +196,8 @@ export class LuaBridge<
         }
         this.checkMemoryLimit();
 
-        // Reentrant: already holding the lock — run directly without queueing
-        if (this.inLock) {
+        // Reentrant: already inside this lock's async context or synchronous invocation
+        if (this.lockStorage.getStore() === true || this.inLock) {
             return await operation();
         }
 
@@ -198,12 +205,14 @@ export class LuaBridge<
             if (signal?.aborted) {
                 throw new BridgeError('Operation cancelled', ErrorCodes.CANCELLED);
             }
-            this.inLock = true;
-            try {
-                return await operation();
-            } finally {
-                this.inLock = false;
-            }
+            return await this.lockStorage.run(true, () => {
+                this.inLock = true;
+                try {
+                    return operation();
+                } finally {
+                    this.inLock = false;
+                }
+            });
         });
 
         this.executionQueue = run.catch(() => undefined);
@@ -225,7 +234,19 @@ export class LuaBridge<
         if (this.state === 'initialized') {
             return;
         }
+        if (this.initPromise) {
+            return await this.initPromise;
+        }
 
+        this.initPromise = this.performInit();
+        try {
+            await this.initPromise;
+        } finally {
+            this.initPromise = null;
+        }
+    }
+
+    private async performInit(): Promise<void> {
         try {
             this.lua = guardWasmoonReturnStack(
                 (await this.factory.createEngine(this.runtimeOptions)) as unknown as LuaEngine,
@@ -263,9 +284,7 @@ export class LuaBridge<
             // Mount any pre-configured files via VfsRegistry
             await this.vfs.mountPending();
 
-            this.state = 'initialized';
-
-            // Process bindings
+            // Process bindings before committing initialized state (keep pendingBindings for reopen())
             if (this.pendingBindings.length > 0) {
                 for (const factory of this.pendingBindings) {
                     const binding = factory({ bridge: this });
@@ -274,9 +293,25 @@ export class LuaBridge<
                         this.activeBindings.push(binding);
                     }
                 }
-                this.pendingBindings = [];
             }
+
+            this.state = 'initialized';
         } catch (error) {
+            for (const binding of this.activeBindings) {
+                try {
+                    binding.close();
+                } catch {
+                    // Swallow per-binding cleanup errors
+                }
+            }
+            this.activeBindings = [];
+            try {
+                this.lua?.global.close();
+            } catch {
+                // Ignore cleanup failure
+            }
+            this.lua = null;
+            this.state = 'new';
             throw toBridgeError('Failed to initialize LuaBridge', error, ErrorCodes.NOT_INITIALIZED);
         }
     }
@@ -403,18 +438,29 @@ export class LuaBridge<
         if (this.started) {
             return;
         }
+        if (this.startPromise) {
+            return await this.startPromise;
+        }
 
-        await this.init();
+        this.startPromise = (async () => {
+            await this.init();
+
+            try {
+                if (this.vfs.has(INIT_FILE)) {
+                    await this.executeFile(INIT_FILE);
+                }
+                await this.execute(CALL_ON_INIT_CODE);
+                this.startMainLoop(intervalMs);
+                this.started = true;
+            } catch (error) {
+                throw toBridgeError('Failed to start LuaBridge', error, ErrorCodes.START);
+            }
+        })();
 
         try {
-            if (this.vfs.has(INIT_FILE)) {
-                await this.executeFile(INIT_FILE);
-            }
-            await this.execute(CALL_ON_INIT_CODE);
-            this.startMainLoop(intervalMs);
-            this.started = true;
-        } catch (error) {
-            throw toBridgeError('Failed to start LuaBridge', error, ErrorCodes.START);
+            await this.startPromise;
+        } finally {
+            this.startPromise = null;
         }
     }
 
@@ -691,13 +737,21 @@ export class LuaBridge<
             return;
         }
         if (path.includes('.')) {
+            const parts = path.split('.');
+            const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+            if (parts.some((p) => FORBIDDEN_KEYS.has(p))) {
+                throw new BridgeError(`Forbidden property name in path: ${path}`, ErrorCodes.SET_GLOBAL);
+            }
             await this.executionService.setDeep(path, value);
             // Also update the globals cache so reopen/init preserves dotted writes
-            const parts = path.split('.');
             let cursor: Record<string, unknown> = this.globals as unknown as Record<string, unknown>;
             for (let i = 0; i < parts.length - 1; i++) {
                 const part = parts[i];
-                if (!(part in cursor) || typeof cursor[part] !== 'object' || cursor[part] === null) {
+                if (
+                    !Object.prototype.hasOwnProperty.call(cursor, part) ||
+                    typeof cursor[part] !== 'object' ||
+                    cursor[part] === null
+                ) {
                     cursor[part] = {};
                 }
                 cursor = cursor[part] as Record<string, unknown>;

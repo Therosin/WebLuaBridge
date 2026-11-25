@@ -162,7 +162,7 @@ export function unwrapTablePack(raw: unknown): unknown {
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
         const obj = raw as Record<string, unknown>;
         const n = obj['n'];
-        if (typeof n === 'number') {
+        if (typeof n === 'number' && Number.isInteger(n) && n >= 0) {
             if (n === 0) return undefined;
             if (n === 1) return obj['1'];
             const results: unknown[] = [];

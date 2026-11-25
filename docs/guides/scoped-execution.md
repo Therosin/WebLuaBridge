@@ -6,9 +6,11 @@ sidebar_position: 3
 
 # Scoped Execution
 
-`useEnvironment()` creates an isolated execution scope backed by a JavaScript object. Lua code reads from the object first, then falls back to `_G`. Writes always go to the object.
+`useEnvironment()` creates a scoped execution environment backed by a JavaScript object. Lua code reads from the object first, then falls back to `_G`. Writes always go to the object.
 
-This is ideal for **plugin systems**, **modding APIs**, **multi-tenant scripts**, or any situation where you need to control what Lua code can access.
+> **Note:** `useEnvironment()` provides **state and namespace isolation**, not a security sandbox — code inside a scope can still read `_G` and standard Lua globals unless you restrict them separately.
+
+This is ideal for **plugin systems**, **modding APIs**, **multi-tenant scripts**, or any situation where you need to isolate script state from global state.
 
 ---
 
