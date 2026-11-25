@@ -17,7 +17,6 @@
  * along with WebLuaBridge.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { LuaFactory } from 'wasmoon';
 
 import type {
@@ -55,6 +54,27 @@ import { ExecutionService } from './execution.ts';
 import { EnvironmentService } from './environment.ts';
 import { ASYNC_LUA_SOURCE } from '../async_lua_content.ts';
 
+interface AsyncLockStorage<T> {
+    getStore(): T | undefined;
+    run<R>(store: T, callback: () => R): R;
+}
+
+function createExecutionLockStorage(): AsyncLockStorage<boolean> {
+    const proc = (globalThis as {
+        process?: {
+            getBuiltinModule?: (id: string) => { AsyncLocalStorage?: new <T>() => AsyncLockStorage<T> } | undefined;
+        };
+    }).process;
+    const AsyncLocalStorageCtor = proc?.getBuiltinModule?.('node:async_hooks')?.AsyncLocalStorage;
+    if (typeof AsyncLocalStorageCtor === 'function') {
+        return new AsyncLocalStorageCtor<boolean>();
+    }
+    return {
+        getStore: () => undefined,
+        run: (_store, callback) => callback(),
+    };
+}
+
 /**
  * Type-safe Lua runtime bridge backed by Wasmoon.
  *
@@ -89,7 +109,7 @@ export class LuaBridge<
     /** Reentrancy guard — true only while a lock-holder synchronously invokes `operation()`. */
     private inLock = false;
     /** Async-context reentrancy tracker so only descendants of the lock-holder bypass the queue. */
-    private lockStorage = new AsyncLocalStorage<boolean>();
+    private lockStorage: AsyncLockStorage<boolean> = createExecutionLockStorage();
     /** In-flight initialization promise shared across concurrent `init()` callers. */
     private initPromise: Promise<void> | null = null;
     /** In-flight startup promise shared across concurrent `start()` callers. */

@@ -64,19 +64,12 @@ function nodeBuiltinStub(): esbuild.Plugin {
     const stubs = new Map<string, string>([
         ['url', 'export const pathToFileURL = () => {};'],
         ['module', 'export default {};'],
-        [
-            'node:async_hooks',
-            'export class AsyncLocalStorage { getStore() { return undefined; } run(_v, fn) { return fn(); } }',
-        ],
     ]);
     return {
         name: 'node-builtin-stub',
         setup(build) {
-            build.onResolve({ filter: /^(url|module|node:async_hooks)$/ }, (args) => {
-                if (args.path === 'node:async_hooks') {
-                    return { path: args.path, namespace: 'node-stub' };
-                }
-                // Only stub url/module if the importer is from node_modules (i.e. wasmoon)
+            build.onResolve({ filter: /^(url|module)$/ }, (args) => {
+                // Only stub if the importer is from node_modules (i.e. wasmoon)
                 if (args.importer && (args.importer.includes('node_modules') || args.importer.includes('.deno'))) {
                     return { path: args.path, namespace: 'node-stub' };
                 }
